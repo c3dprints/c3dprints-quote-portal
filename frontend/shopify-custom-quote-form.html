@@ -1,0 +1,316 @@
+<!-- C3D Prints Custom Quote Form -->
+<!-- Paste into a Shopify custom liquid section or page template. -->
+
+<style>
+  .c3d-quote-wrap {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 24px 16px;
+    background: #0b1623;
+    color: #ddeeff;
+    font-family: Arial, sans-serif;
+  }
+
+  .c3d-quote-header {
+    text-align: center;
+    margin-bottom: 24px;
+  }
+
+  .c3d-quote-header h1 {
+    color: #33ccff;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+  }
+
+  .c3d-quote-header p {
+    color: #8aa8c5;
+    line-height: 1.5;
+  }
+
+  .c3d-card {
+    background: #162236;
+    border: 1px solid #1e3550;
+    border-radius: 16px;
+    padding: 20px;
+    margin-bottom: 16px;
+  }
+
+  .c3d-card h2 {
+    color: #00aaff;
+    font-size: 16px;
+    margin: 0 0 16px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #1e3550;
+  }
+
+  .c3d-field label {
+    display: block;
+    color: #8aa8c5;
+    font-size: 13px;
+    font-weight: bold;
+    margin-bottom: 6px;
+  }
+
+  .c3d-field input,
+  .c3d-field textarea,
+  .c3d-field select {
+    width: 100%;
+    background: #0d1928;
+    border: 1px solid #1e3550;
+    border-radius: 10px;
+    color: #ddeeff;
+    padding: 12px;
+    margin-bottom: 16px;
+    font-size: 15px;
+  }
+
+  .c3d-field textarea {
+    min-height: 110px;
+    resize: vertical;
+  }
+
+  .c3d-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+
+  .c3d-check {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .c3d-check input {
+    margin-top: 3px;
+  }
+
+  .c3d-notice {
+    background: rgba(255,107,26,.08);
+    border: 1px solid rgba(255,107,26,.35);
+    border-radius: 12px;
+    padding: 14px;
+    color: #ff8c3a;
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 16px;
+  }
+
+  .c3d-submit {
+    width: 100%;
+    background: linear-gradient(135deg, #ff6b1a, #ff8c3a);
+    color: white;
+    border: none;
+    border-radius: 14px;
+    padding: 16px;
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 1px;
+    cursor: pointer;
+  }
+
+  .c3d-submit:disabled {
+    opacity: .65;
+    cursor: wait;
+  }
+
+  .c3d-status {
+    margin-top: 16px;
+    padding: 14px;
+    border-radius: 12px;
+    display: none;
+  }
+
+  .c3d-status.success {
+    display: block;
+    background: rgba(0,232,144,.12);
+    border: 1px solid rgba(0,232,144,.35);
+    color: #00e890;
+  }
+
+  .c3d-status.error {
+    display: block;
+    background: rgba(255,61,90,.12);
+    border: 1px solid rgba(255,61,90,.35);
+    color: #ff3d5a;
+  }
+
+  @media (max-width: 640px) {
+    .c3d-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
+
+<div class="c3d-quote-wrap">
+  <div class="c3d-quote-header">
+    <h1>C3D Prints Custom Quote</h1>
+    <p>Upload your file or send clear photos. We’ll review material, print time, complexity, and fit requirements before quoting.</p>
+  </div>
+
+  <div class="c3d-notice">
+    For best results, upload an STL/3MF file. If this is a broken part replacement, include clear photos with measurements.
+  </div>
+
+  <form id="c3d-quote-form">
+    <div class="c3d-card">
+      <h2>Customer Info</h2>
+
+      <div class="c3d-field">
+        <label for="name">Name *</label>
+        <input id="name" name="name" type="text" required>
+      </div>
+
+      <div class="c3d-field">
+        <label for="email">Email *</label>
+        <input id="email" name="email" type="email" required>
+      </div>
+
+      <div class="c3d-field">
+        <label for="phone">Phone / Text Number</label>
+        <input id="phone" name="phone" type="text">
+      </div>
+    </div>
+
+    <div class="c3d-card">
+      <h2>Print Request</h2>
+
+      <div class="c3d-field">
+        <label for="project_description">What do you need printed? *</label>
+        <textarea id="project_description" name="project_description" required placeholder="Example: replacement car clip, custom sign, bracket, prototype, toy part, etc."></textarea>
+      </div>
+
+      <div class="c3d-field">
+        <label for="files">Upload STL, 3MF, ZIP, or photos</label>
+        <input id="files" name="files" type="file" multiple>
+      </div>
+
+      <div class="c3d-grid">
+        <div class="c3d-field">
+          <label for="quantity">Quantity *</label>
+          <input id="quantity" name="quantity" type="number" min="1" value="1" required>
+        </div>
+
+        <div class="c3d-field">
+          <label for="approx_size">Approximate Size</label>
+          <input id="approx_size" name="approx_size" type="text" placeholder="Example: 4in x 2in x 1in">
+        </div>
+      </div>
+
+      <div class="c3d-field">
+        <label for="deadline">Needed By Date</label>
+        <input id="deadline" name="deadline" type="date">
+      </div>
+    </div>
+
+    <div class="c3d-card">
+      <h2>Material & Use</h2>
+
+      <div class="c3d-grid">
+        <div class="c3d-field">
+          <label for="material_preference">Material Preference</label>
+          <select id="material_preference" name="material_preference">
+            <option>Not sure</option>
+            <option>PLA</option>
+            <option>PETG</option>
+            <option>ABS / ASA</option>
+            <option>TPU Flexible</option>
+            <option>Other</option>
+          </select>
+        </div>
+
+        <div class="c3d-field">
+          <label for="color_preference">Color Preference</label>
+          <input id="color_preference" name="color_preference" type="text" placeholder="Example: black, white, orange">
+        </div>
+      </div>
+
+      <div class="c3d-field">
+        <label for="use_case">Where will this be used?</label>
+        <select id="use_case" name="use_case">
+          <option>Indoor</option>
+          <option>Outdoor</option>
+          <option>Car / heat exposure</option>
+          <option>Mechanical / functional</option>
+          <option>Decorative</option>
+          <option>Not sure</option>
+        </select>
+      </div>
+
+      <label class="c3d-check"><input type="checkbox" name="requirements" value="Heat resistant"> Needs heat resistance</label>
+      <label class="c3d-check"><input type="checkbox" name="requirements" value="Strength needed"> Needs strength / durability</label>
+      <label class="c3d-check"><input type="checkbox" name="requirements" value="Exact fit required"> Needs exact fit / tight tolerance</label>
+      <label class="c3d-check"><input type="checkbox" name="requirements" value="Needs design or CAD work"> I need help designing or recreating the part</label>
+    </div>
+
+    <div class="c3d-card">
+      <h2>Delivery</h2>
+
+      <div class="c3d-field">
+        <label for="delivery_method">How do you want to receive it?</label>
+        <select id="delivery_method" name="delivery_method">
+          <option>Shipping</option>
+          <option>Local pickup</option>
+          <option>Not sure</option>
+        </select>
+      </div>
+
+      <div class="c3d-field">
+        <label for="shipping_location">Shipping City / State</label>
+        <input id="shipping_location" name="shipping_location" type="text" placeholder="Example: Chelsea, MA">
+      </div>
+
+      <div class="c3d-field">
+        <label for="additional_notes">Anything else we should know?</label>
+        <textarea id="additional_notes" name="additional_notes"></textarea>
+      </div>
+    </div>
+
+    <button id="c3d-submit" class="c3d-submit" type="submit">Submit Quote Request</button>
+    <div id="c3d-status" class="c3d-status"></div>
+  </form>
+</div>
+
+<script>
+  // Replace this with your deployed Render backend URL.
+  const API_URL = "https://YOUR-RENDER-APP.onrender.com/quote-request";
+
+  const form = document.getElementById("c3d-quote-form");
+  const submitButton = document.getElementById("c3d-submit");
+  const statusBox = document.getElementById("c3d-status");
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+
+    submitButton.disabled = true;
+    submitButton.textContent = "Submitting...";
+    statusBox.className = "c3d-status";
+    statusBox.textContent = "";
+
+    try {
+      const formData = new FormData(form);
+
+      const response = await fetch(API_URL, {
+        method: "POST",
+        body: formData
+      });
+
+      if (!response.ok) {
+        throw new Error("Submission failed.");
+      }
+
+      const result = await response.json();
+
+      statusBox.className = "c3d-status success";
+      statusBox.textContent = "Quote request submitted. We’ll review it and follow up by email.";
+      form.reset();
+    } catch (error) {
+      statusBox.className = "c3d-status error";
+      statusBox.textContent = "Something went wrong. Please email hi@c3dprints.com directly.";
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = "Submit Quote Request";
+    }
+  });
+</script>
