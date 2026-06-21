@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>C3D Prints Quote Calculator</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#00aaff;--blue-l:#33ccff;--orange:#ff6b1a;--orange-l:#ff8c3a;--green:#00e890;--red:#ff3d5a;--text:#ddeeff;--muted:#7fa0bd}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}.wrap{max-width:820px;margin:0 auto;padding:24px 16px 60px}header{text-align:center;margin-bottom:22px}header h1{color:var(--blue-l);margin:0 0 8px;letter-spacing:1px}header p{color:var(--muted);margin:0}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:16px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}label{display:block;color:var(--muted);font-size:13px;font-weight:bold;margin-bottom:6px}input,select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}button{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:bold;letter-spacing:1px;cursor:pointer}.results{display:none}.results.show{display:block}.big-price{text-align:center;font-size:48px;color:var(--green);font-weight:bold;margin:10px 0}.line{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.06);padding:9px 0}.line span:first-child{color:var(--muted)}.quote-box{background:#0d1928;border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5}.copy-btn{margin-top:10px;background:linear-gradient(135deg,#005f8f,#00aaff)}.error{color:var(--red);margin-top:12px;display:none}.hint{font-size:13px;color:var(--muted);line-height:1.45;margin-top:10px}@media(max-width:700px){.grid{grid-template-columns:1fr}.big-price{font-size:38px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1>C3D Prints Quote Calculator</h1>
+  <p>Slice the file, enter grams + hours, then copy the customer quote.</p>
+</header>
+
+<div class="card">
+  <h2>Print Quote</h2>
+  <div class="grid">
+    <div><label>Filament Used (grams)</label><input id="grams" type="number" step="0.1" placeholder="100"></div>
+    <div><label>Print Time (hours)</label><input id="hours" type="number" step="0.1" placeholder="6.5"></div>
+    <div><label>Quantity</label><input id="quantity" type="number" min="1" value="1"></div>
+    <div><label>Fail Rate (%)</label><input id="fail_rate" type="number" min="0" max="99" step="1" value="0"></div>
+    <div>
+      <label>Complexity</label>
+      <select id="complexity_multiplier">
+        <option value="1">Easy / normal print — 1.0x</option>
+        <option value="1.25">Medium / more supports — 1.25x</option>
+        <option value="1.5">Hard / annoying print — 1.5x</option>
+        <option value="2">Tight fit / functional risk — 2.0x</option>
+      </select>
+    </div>
+    <div>
+      <label>Shipping</label>
+      <select id="include_shipping">
+        <option value="true">Include shipping</option>
+        <option value="false">Pickup / no shipping</option>
+      </select>
+    </div>
+  </div>
+  <div class="hint">Defaults: $0.33/kWh, $20 spool, 1000g spool, 50% markup.</div>
+</div>
+
+<button id="calculate">Calculate Quote</button>
+<div id="error" class="error"></div>
+
+<div id="results" class="card results">
+  <h2>Quote Results</h2>
+  <div class="big-price" id="sell_total">$--.--</div>
+  <div class="line"><span>Suggested sell price / unit</span><strong id="sell_unit">--</strong></div>
+  <div class="line"><span>Cost to make / unit</span><strong id="cost_unit">--</strong></div>
+  <div class="line"><span>Profit / unit</span><strong id="profit_unit">--</strong></div>
+  <div class="line"><span>Total print time</span><strong id="total_hours">--</strong></div>
+  <div class="line"><span>Total material</span><strong id="total_grams">--</strong></div>
+</div>
+
+<div id="breakdown" class="card results">
+  <h2>Cost Breakdown Per Unit</h2>
+  <div class="line"><span>Filament</span><strong id="b_filament">--</strong></div>
+  <div class="line"><span>Electricity</span><strong id="b_electricity">--</strong></div>
+  <div class="line"><span>Nozzle wear</span><strong id="b_nozzle">--</strong></div>
+  <div class="line"><span>Print sheet wear</span><strong id="b_sheet">--</strong></div>
+  <div class="line"><span>Packaging</span><strong id="b_packaging">--</strong></div>
+  <div class="line"><span>Shipping</span><strong id="b_shipping">--</strong></div>
+  <div class="line"><span>Fail overhead</span><strong id="b_fail">--</strong></div>
+  <div class="line"><span>Complexity added cost</span><strong id="b_complexity">--</strong></div>
+</div>
+
+<div id="customer" class="card results">
+  <h2>Customer Reply Draft</h2>
+  <div id="customer_quote" class="quote-box"></div>
+  <button class="copy-btn" id="copy">Copy Customer Quote</button>
+</div>
+</div>
+
+<script>
+const API_URL="https://c3dprints-quote-portal.onrender.com/calculate";
+const $=id=>document.getElementById(id);
+const money=n=>"$"+Number(n).toFixed(2);
+
+$("calculate").addEventListener("click",async()=>{
+  $("error").style.display="none";
+  ["results","breakdown","customer"].forEach(id=>$(id).classList.remove("show"));
+
+  const payload={
+    grams:Number($("grams").value),
+    hours:Number($("hours").value),
+    quantity:Number($("quantity").value||1),
+    fail_rate:Number($("fail_rate").value||0),
+    complexity_multiplier:Number($("complexity_multiplier").value||1),
+    include_shipping:$("include_shipping").value==="true",
+    labor_minutes:0,
+    cad_fee:0,
+    rush_fee:0
+  };
+
+  if(!payload.grams||payload.grams<=0||!payload.hours||payload.hours<=0){
+    $("error").textContent="Enter grams and print hours first.";
+    $("error").style.display="block";
+    return;
+  }
+
+  try{
+    const response=await fetch(API_URL,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});
+    if(!response.ok){
+      const problem=await response.json();
+      throw new Error(problem.detail||"Calculation failed.");
+    }
+    const data=await response.json();
+
+    $("sell_total").textContent=money(data.totals.suggested_sell_price);
+    $("sell_unit").textContent=money(data.per_unit.suggested_sell_price);
+    $("cost_unit").textContent=money(data.per_unit.cost_to_make);
+    $("profit_unit").textContent=money(data.per_unit.profit);
+    $("total_hours").textContent=data.totals.hours+" hrs";
+    $("total_grams").textContent=data.totals.grams+" g";
+
+    $("b_filament").textContent=money(data.breakdown_per_unit.filament);
+    $("b_electricity").textContent=money(data.breakdown_per_unit.electricity);
+    $("b_nozzle").textContent=money(data.breakdown_per_unit.nozzle_wear);
+    $("b_sheet").textContent=money(data.breakdown_per_unit.print_sheet_wear);
+    $("b_packaging").textContent=money(data.breakdown_per_unit.packaging);
+    $("b_shipping").textContent=money(data.breakdown_per_unit.shipping);
+    $("b_fail").textContent=money(data.breakdown_per_unit.fail_overhead);
+    $("b_complexity").textContent=money(data.breakdown_per_unit.complexity_added_cost);
+
+    $("customer_quote").textContent=data.customer_quote;
+    ["results","breakdown","customer"].forEach(id=>$(id).classList.add("show"));
+  }catch(err){
+    $("error").textContent=err.message||"Something went wrong.";
+    $("error").style.display="block";
+  }
+});
+
+$("copy").addEventListener("click",async()=>{
+  await navigator.clipboard.writeText($("customer_quote").textContent);
+  $("copy").textContent="Copied!";
+  setTimeout(()=>$("copy").textContent="Copy Customer Quote",1500);
+});
+</script>
+</body>
+</html>
