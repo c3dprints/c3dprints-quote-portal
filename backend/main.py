@@ -33,7 +33,7 @@ app.add_middleware(
 
 def get_pricing_settings() -> PricingSettings:
     return PricingSettings(
-        kwh=float(os.getenv("DEFAULT_KWH", 0.31)),
+        kwh=float(os.getenv("DEFAULT_KWH", 0.33)),
         watts=float(os.getenv("DEFAULT_WATTS", 180)),
         spool_usd=float(os.getenv("DEFAULT_SPOOL_USD", 20)),
         spool_g=float(os.getenv("DEFAULT_SPOOL_G", 1000)),
@@ -44,7 +44,7 @@ def get_pricing_settings() -> PricingSettings:
         shipping=float(os.getenv("DEFAULT_SHIPPING", 5)),
         boxing=float(os.getenv("DEFAULT_BOXING", 1.50)),
         tax=float(os.getenv("DEFAULT_TAX", 6.25)),
-        markup=float(os.getenv("DEFAULT_MARKUP", 300)),
+        markup=float(os.getenv("DEFAULT_MARKUP", 50)),
         labor_rate=float(os.getenv("DEFAULT_LABOR_RATE", 35)),
     )
 
