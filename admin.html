@@ -20,7 +20,17 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 </head>
 <body>
 <div id="password-gate"><div class="gate-card"><h1>C3D Admin</h1><p>Internal quote dashboard</p><input id="password-input" type="password" placeholder="Enter password"><button class="primary-btn" onclick="checkPassword()">Unlock Dashboard</button><div id="password-error"></div></div></div>
-<div id="app"><header><div><h1>C3D Prints Admin Dashboard</h1><p>Quote queue, AI triage, and pricing calculator</p></div><div class="header-actions"><button class="ghost-btn" onclick="loadRequests()">Refresh</button><button class="ghost-btn" onclick="lockDashboard()">Lock</button></div></header>
+<div id="app"><header><div><h1>C3D Prints Admin Dashboard</h1><p>Quote queue, AI triage, and pricing calculator</p></div>
+<div class="header-actions">
+        <button class="ghost-btn"
+            onclick="window.location.href='https://quote.c3dprints.com'">
+            Quote Portal
+        </button>
+    
+        <button class="ghost-btn" onclick="loadRequests()">Refresh</button>
+        <button class="ghost-btn" onclick="lockDashboard()">Lock</button>
+    </div>
+</header>
 <div class="layout"><aside class="sidebar"><div class="search-row"><input id="search" type="text" placeholder="Search requests..." oninput="renderRequests()"></div><div id="request-list"><div class="empty">Loading requests...</div></div></aside>
 <main class="main"><div id="no-selection" class="card"><div class="empty">Select a quote request from the left.</div></div><div id="selected-view" class="hidden">
 <div class="card"><h2>Request Details</h2><div class="detail-grid">
@@ -34,9 +44,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 <div id="calc-results" class="results-grid hidden"><div class="result-cell"><div class="value" id="r-sell-total">$--</div><div class="label">Sell Total</div></div><div class="result-cell"><div class="value" id="r-sell-unit">$--</div><div class="label">Sell / Unit</div></div><div class="result-cell"><div class="value" id="r-cost-unit">$--</div><div class="label">Cost / Unit</div></div><div class="result-cell"><div class="value" id="r-profit-unit">$--</div><div class="label">Profit / Unit</div></div></div></div>
 <div class="card"><h2>Customer Reply Draft</h2><div id="customer-quote" class="quote-box">Calculate a quote to generate reply text.</div><div class="action-row"><button class="secondary-btn" onclick="copyCustomerQuote()">Copy Quote Text</button><button class="ghost-btn" onclick="openEmailClient()">Open Email Client</button></div></div>
 </div></main></div></div>
-<button onclick="window.location.href='https://quote.c3dprints.com'">
-    Quote Portal
-  </button>
+
 <script>
 const API_BASE="https://c3dprints-quote-portal.onrender.com";const REQUESTS_URL=API_BASE+"/admin/requests";const CALCULATE_URL=API_BASE+"/calculate";const INTERNAL_PASSWORD="455Yd3871!";
 let requests=[];let selectedRequest=null;let latestQuoteText="";const $=id=>document.getElementById(id);const money=value=>"$"+Number(value).toFixed(2);
