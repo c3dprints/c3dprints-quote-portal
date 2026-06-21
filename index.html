@@ -7,6 +7,29 @@
 <style>
 :root{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#00aaff;--blue-l:#33ccff;--orange:#ff6b1a;--orange-l:#ff8c3a;--green:#00e890;--red:#ff3d5a;--text:#ddeeff;--muted:#7fa0bd}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}.wrap{max-width:820px;margin:0 auto;padding:24px 16px 60px}header{text-align:center;margin-bottom:22px}header h1{color:var(--blue-l);margin:0 0 8px;letter-spacing:1px}header p{color:var(--muted);margin:0}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:18px;margin-bottom:16px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:14px}label{display:block;color:var(--muted);font-size:13px;font-weight:bold;margin-bottom:6px}input,select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}button{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:16px;font-size:16px;font-weight:bold;letter-spacing:1px;cursor:pointer}.results{display:none}.results.show{display:block}.big-price{text-align:center;font-size:48px;color:var(--green);font-weight:bold;margin:10px 0}.line{display:flex;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.06);padding:9px 0}.line span:first-child{color:var(--muted)}.quote-box{background:#0d1928;border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5}.copy-btn{margin-top:10px;background:linear-gradient(135deg,#005f8f,#00aaff)}.error{color:var(--red);margin-top:12px;display:none}.hint{font-size:13px;color:var(--muted);line-height:1.45;margin-top:10px}@media(max-width:700px){.grid{grid-template-columns:1fr}.big-price{font-size:38px}}
+.top-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 22px;
+  gap: 20px;
+}
+
+.header-buttons {
+  display: flex;
+  gap: 12px;
+}
+
+.header-buttons button {
+  background: linear-gradient(135deg, #ff6b1a, #ff8c3a);
+  color: white;
+  border: none;
+  border-radius: 12px;
+  padding: 12px 18px;
+  font-size: 14px;
+  font-weight: bold;
+  cursor: pointer;
+}
 </style>
 </head>
 <body>
