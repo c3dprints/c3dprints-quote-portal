@@ -3,6 +3,7 @@ from openai import OpenAI
 
 
 def build_plain_summary(data: dict) -> str:
+    """Fallback summary if OpenAI key is not configured."""
     return f"""
 New C3D Prints quote request
 
@@ -30,18 +31,24 @@ Customer notes:
 
 
 def ai_triage_summary(data: dict) -> str:
+    """
+    Generates a practical internal summary for Chris/C3D Prints.
+    If OpenAI is not configured, returns a plain summary.
+    """
     api_key = os.getenv("OPENAI_API_KEY")
     model = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
     if not api_key:
         return build_plain_summary(data)
 
-    try:
-        client = OpenAI(api_key=api_key)
-        prompt = f"""
+    client = OpenAI(api_key=api_key)
+
+    prompt = f"""
 You are the internal quoting assistant for C3D Prints, a custom 3D printing shop.
 
 Analyze this quote request and produce an internal summary.
+
+Be practical and direct.
 
 Include:
 1. Project type
@@ -55,15 +62,14 @@ Include:
 Quote request:
 {data}
 """
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": "You help triage custom 3D printing quote requests."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.25,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as exc:
-        print(f"AI triage failed: {exc}")
-        return build_plain_summary(data)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": "You help triage custom 3D printing quote requests."},
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.25,
+    )
+
+    return response.choices[0].message.content.strip()

@@ -21,7 +21,12 @@ DB_PATH = Path(__file__).parent / "quote_requests.db"
 
 app = FastAPI(title=APP_NAME)
 
-allowed_origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins or ["*"],
@@ -31,28 +36,11 @@ app.add_middleware(
 )
 
 
-def get_pricing_settings() -> PricingSettings:
-    return PricingSettings(
-        kwh=float(os.getenv("DEFAULT_KWH", 0.31)),
-        watts=float(os.getenv("DEFAULT_WATTS", 180)),
-        spool_usd=float(os.getenv("DEFAULT_SPOOL_USD", 20)),
-        spool_g=float(os.getenv("DEFAULT_SPOOL_G", 1000)),
-        nozzle_cost=float(os.getenv("DEFAULT_NOZZLE_COST", 8)),
-        nozzle_hours=float(os.getenv("DEFAULT_NOZZLE_HOURS", 400)),
-        sheet_cost=float(os.getenv("DEFAULT_SHEET_COST", 25)),
-        sheet_prints=float(os.getenv("DEFAULT_SHEET_PRINTS", 500)),
-        shipping=float(os.getenv("DEFAULT_SHIPPING", 5)),
-        boxing=float(os.getenv("DEFAULT_BOXING", 1.50)),
-        tax=float(os.getenv("DEFAULT_TAX", 6.25)),
-        markup=float(os.getenv("DEFAULT_MARKUP", 300)),
-        labor_rate=float(os.getenv("DEFAULT_LABOR_RATE", 35)),
-    )
-
-
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         CREATE TABLE IF NOT EXISTS quote_requests (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             created_at TEXT NOT NULL,
@@ -73,7 +61,8 @@ def init_db():
             ai_summary TEXT,
             status TEXT DEFAULT 'New'
         )
-    """)
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -84,7 +73,8 @@ init_db()
 def save_request(data: dict, ai_summary: str) -> int:
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(
+        """
         INSERT INTO quote_requests (
             created_at, name, email, phone, project_description, quantity,
             approx_size, deadline, material_preference, color_preference,
@@ -92,25 +82,31 @@ def save_request(data: dict, ai_summary: str) -> int:
             additional_notes, ai_summary, status
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        datetime.utcnow().isoformat(),
-        data["name"], data["email"], data.get("phone"),
-        data["project_description"], data["quantity"], data.get("approx_size"),
-        data.get("deadline"), data.get("material_preference"),
-        data.get("color_preference"), data.get("use_case"),
-        json.dumps(data.get("requirements", [])), data.get("delivery_method"),
-        data.get("shipping_location"), data.get("additional_notes"),
-        ai_summary, "New",
-    ))
+        """,
+        (
+            datetime.utcnow().isoformat(),
+            data["name"],
+            data["email"],
+            data.get("phone"),
+            data["project_description"],
+            data["quantity"],
+            data.get("approx_size"),
+            data.get("deadline"),
+            data.get("material_preference"),
+            data.get("color_preference"),
+            data.get("use_case"),
+            json.dumps(data.get("requirements", [])),
+            data.get("delivery_method"),
+            data.get("shipping_location"),
+            data.get("additional_notes"),
+            ai_summary,
+            "New",
+        ),
+    )
     request_id = cur.lastrowid
     conn.commit()
     conn.close()
     return request_id
-
-
-@app.get("/")
-def root():
-    return {"ok": True, "app": APP_NAME, "routes": ["/health", "/quote-request", "/calculate", "/admin/requests"]}
 
 
 @app.get("/health")
@@ -136,13 +132,27 @@ async def quote_request(
     additional_notes: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
 ):
+    """
+    Receives customer quote request from Shopify form.
+
+    File uploads are accepted for now but not persisted in this starter version.
+    Next upgrade should store files in Supabase Storage, S3, or Cloudflare R2.
+    """
+
     data = {
-        "name": name, "email": email, "phone": phone,
-        "project_description": project_description, "quantity": quantity,
-        "approx_size": approx_size, "deadline": deadline,
-        "material_preference": material_preference, "color_preference": color_preference,
-        "use_case": use_case, "requirements": requirements or [],
-        "delivery_method": delivery_method, "shipping_location": shipping_location,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "project_description": project_description,
+        "quantity": quantity,
+        "approx_size": approx_size,
+        "deadline": deadline,
+        "material_preference": material_preference,
+        "color_preference": color_preference,
+        "use_case": use_case,
+        "requirements": requirements or [],
+        "delivery_method": delivery_method,
+        "shipping_location": shipping_location,
         "additional_notes": additional_notes,
         "uploaded_files": [f.filename for f in files] if files else [],
     }
@@ -151,6 +161,7 @@ async def quote_request(
     request_id = save_request(data, ai_summary)
 
     notify_email = os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com")
+
     file_list = "<br>".join(data["uploaded_files"]) if data["uploaded_files"] else "No files uploaded"
 
     html_body = f"""
@@ -164,9 +175,16 @@ async def quote_request(
     <p><strong>Deadline:</strong> {deadline or "Not provided"}</p>
     <p><strong>Delivery:</strong> {delivery_method or "Not provided"}</p>
     <p><strong>Shipping Location:</strong> {shipping_location or "Not provided"}</p>
-    <h3>Project Description</h3><p>{project_description}</p>
-    <h3>Requirements</h3><p>{", ".join(requirements or []) or "None selected"}</p>
-    <h3>Uploaded Files</h3><p>{file_list}</p>
+
+    <h3>Project Description</h3>
+    <p>{project_description}</p>
+
+    <h3>Requirements</h3>
+    <p>{", ".join(requirements or []) or "None selected"}</p>
+
+    <h3>Uploaded Files</h3>
+    <p>{file_list}</p>
+
     <h3>AI Triage Summary</h3>
     <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{ai_summary}</pre>
     """
@@ -178,7 +196,12 @@ async def quote_request(
         text_body=ai_summary,
     )
 
-    return {"success": True, "request_id": request_id, "message": "Quote request submitted successfully.", "email": email_result}
+    return {
+        "success": True,
+        "request_id": request_id,
+        "message": "Quote request submitted successfully.",
+        "email": email_result,
+    }
 
 
 class PricingRequest(BaseModel):
@@ -196,6 +219,22 @@ class PricingRequest(BaseModel):
 @app.post("/calculate")
 def calculate(request: PricingRequest):
     try:
+        settings = PricingSettings(
+            kwh=float(os.getenv("DEFAULT_KWH", 0.31)),
+            watts=float(os.getenv("DEFAULT_WATTS", 180)),
+            spool_usd=float(os.getenv("DEFAULT_SPOOL_USD", 20)),
+            spool_g=float(os.getenv("DEFAULT_SPOOL_G", 1000)),
+            nozzle_cost=float(os.getenv("DEFAULT_NOZZLE_COST", 8)),
+            nozzle_hours=float(os.getenv("DEFAULT_NOZZLE_HOURS", 400)),
+            sheet_cost=float(os.getenv("DEFAULT_SHEET_COST", 25)),
+            sheet_prints=float(os.getenv("DEFAULT_SHEET_PRINTS", 500)),
+            shipping=float(os.getenv("DEFAULT_SHIPPING", 5)),
+            boxing=float(os.getenv("DEFAULT_BOXING", 1.50)),
+            tax=float(os.getenv("DEFAULT_TAX", 6.25)),
+            markup=float(os.getenv("DEFAULT_MARKUP", 300)),
+            labor_rate=float(os.getenv("DEFAULT_LABOR_RATE", 35)),
+        )
+
         return calculate_quote(
             grams=request.grams,
             hours=request.hours,
@@ -206,14 +245,19 @@ def calculate(request: PricingRequest):
             rush_fee=request.rush_fee,
             complexity_multiplier=request.complexity_multiplier,
             include_shipping=request.include_shipping,
-            settings=get_pricing_settings(),
+            settings=settings,
         )
+
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
 
 @app.get("/admin/requests")
 def list_requests():
+    """
+    Simple admin endpoint for now.
+    Do not expose publicly long-term without auth.
+    """
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
