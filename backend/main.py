@@ -6,13 +6,14 @@ from pathlib import Path
 from typing import List, Optional
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, File, UploadFile, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from ai_triage import ai_triage_summary
+from auth import check_admin_credentials, create_admin_token, verify_admin
 from email_service import send_quote_notification
-from pricing_engine import calculate_quote, PricingSettings
+from pricing_engine import PricingSettings, calculate_quote
 
 load_dotenv()
 
@@ -110,12 +111,37 @@ def save_request(data: dict, ai_summary: str) -> int:
 
 @app.get("/")
 def root():
-    return {"ok": True, "app": APP_NAME, "routes": ["/health", "/quote-request", "/calculate", "/admin/requests"]}
+    return {
+        "ok": True,
+        "app": APP_NAME,
+        "routes": ["/health", "/quote-request", "/calculate", "/admin/login", "/admin/requests"],
+    }
 
 
 @app.get("/health")
 def health():
     return {"ok": True, "app": APP_NAME}
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/admin/login")
+def admin_login(request: AdminLoginRequest):
+    try:
+        valid = check_admin_credentials(request.username, request.password)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    return {
+        "token": create_admin_token(request.username),
+        "expires_in_seconds": 60 * 60 * 12,
+    }
 
 
 @app.post("/quote-request")
@@ -213,7 +239,7 @@ def calculate(request: PricingRequest):
 
 
 @app.get("/admin/requests")
-def list_requests():
+def list_requests(admin=Depends(verify_admin)):
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()

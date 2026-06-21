@@ -46,7 +46,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 </div></main></div></div>
 
 <script>
-const API_BASE="https://c3dprints-quote-portal.onrender.com";const REQUESTS_URL=API_BASE+"/admin/requests";const CALCULATE_URL=API_BASE+"/calculate";const INTERNAL_PASSWORD="455Yd3871!";
+const API_BASE="https://c3dprints-quote-portal.onrender.com";const REQUESTS_URL=API_BASE+"/admin/requests";const CALCULATE_URL=API_BASE+"/calculate";POST /admin/login;
 let requests=[];let selectedRequest=null;let latestQuoteText="";const $=id=>document.getElementById(id);const money=value=>"$"+Number(value).toFixed(2);
 function checkPassword(){const entered=$("password-input").value;if(entered===INTERNAL_PASSWORD){sessionStorage.setItem("c3d_admin_unlocked","true");$("password-gate").style.display="none";$("app").style.display="block";loadRequests()}else{$("password-error").textContent="Wrong password."}}
 function lockDashboard(){sessionStorage.removeItem("c3d_admin_unlocked");location.reload()}
