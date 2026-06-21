@@ -17,9 +17,6 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 .calc-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
 @media(max-width:980px){.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
 </style>
-<button onclick="window.location.href='https://c3dprints.com/pages/quote'">
-  Admin Dashboard
-</button>
 </head>
 <body>
 <div id="password-gate"><div class="gate-card"><h1>C3D Admin</h1><p>Internal quote dashboard</p><input id="password-input" type="password" placeholder="Enter password"><button class="primary-btn" onclick="checkPassword()">Unlock Dashboard</button><div id="password-error"></div></div></div>
@@ -37,6 +34,9 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 <div id="calc-results" class="results-grid hidden"><div class="result-cell"><div class="value" id="r-sell-total">$--</div><div class="label">Sell Total</div></div><div class="result-cell"><div class="value" id="r-sell-unit">$--</div><div class="label">Sell / Unit</div></div><div class="result-cell"><div class="value" id="r-cost-unit">$--</div><div class="label">Cost / Unit</div></div><div class="result-cell"><div class="value" id="r-profit-unit">$--</div><div class="label">Profit / Unit</div></div></div></div>
 <div class="card"><h2>Customer Reply Draft</h2><div id="customer-quote" class="quote-box">Calculate a quote to generate reply text.</div><div class="action-row"><button class="secondary-btn" onclick="copyCustomerQuote()">Copy Quote Text</button><button class="ghost-btn" onclick="openEmailClient()">Open Email Client</button></div></div>
 </div></main></div></div>
+<button onclick="window.location.href='https://c3dprints.com/pages/quote'">
+    Quote
+  </button>
 <script>
 const API_BASE="https://c3dprints-quote-portal.onrender.com";const REQUESTS_URL=API_BASE+"/admin/requests";const CALCULATE_URL=API_BASE+"/calculate";const INTERNAL_PASSWORD="455Yd3871!";
 let requests=[];let selectedRequest=null;let latestQuoteText="";const $=id=>document.getElementById(id);const money=value=>"$"+Number(value).toFixed(2);
