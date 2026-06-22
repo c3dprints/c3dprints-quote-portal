@@ -1,9 +1,12 @@
 import json
 import os
-import sqlite3
-from datetime import datetime
-from pathlib import Path
+from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+import psycopg
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
@@ -18,8 +21,7 @@ from pricing_engine import PricingSettings, calculate_quote
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
-DEFAULT_DB_PATH = Path(__file__).parent / "quote_requests.db"
-DB_PATH = Path(os.getenv("DB_PATH", str(DEFAULT_DB_PATH))).expanduser()
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 VALID_STATUSES = {
     "New",
@@ -33,7 +35,12 @@ VALID_STATUSES = {
 
 app = FastAPI(title=APP_NAME)
 
-allowed_origins = [origin.strip() for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()]
+allowed_origins = [
+    origin.strip()
+    for origin in os.getenv("ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins or ["*"],
@@ -41,6 +48,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def normalized_database_url() -> str:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
+
+    parsed = urlparse(DATABASE_URL)
+    query = dict(parse_qsl(parsed.query))
+
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def get_conn():
+    return psycopg.connect(
+        normalized_database_url(),
+        row_factory=dict_row,
+        prepare_threshold=None,
+    )
 
 
 def get_pricing_settings() -> PricingSettings:
@@ -62,64 +90,123 @@ def get_pricing_settings() -> PricingSettings:
 
 
 def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS quote_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT,
-            project_description TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            approx_size TEXT,
-            deadline TEXT,
-            material_preference TEXT,
-            color_preference TEXT,
-            use_case TEXT,
-            requirements TEXT,
-            delivery_method TEXT,
-            shipping_location TEXT,
-            additional_notes TEXT,
-            ai_summary TEXT,
-            status TEXT DEFAULT 'New'
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-
-init_db()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quote_requests (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    phone TEXT,
+                    project_description TEXT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    approx_size TEXT,
+                    deadline TEXT,
+                    material_preference TEXT,
+                    color_preference TEXT,
+                    use_case TEXT,
+                    requirements JSONB DEFAULT '[]'::jsonb,
+                    delivery_method TEXT,
+                    shipping_location TEXT,
+                    additional_notes TEXT,
+                    uploaded_files JSONB DEFAULT '[]'::jsonb,
+                    ai_summary TEXT,
+                    status TEXT NOT NULL DEFAULT 'New'
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_quote_requests_created_at
+                ON quote_requests (created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_quote_requests_status
+                ON quote_requests (status);
+                """
+            )
 
 
 def save_request(data: dict, ai_summary: str) -> int:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO quote_requests (
-            created_at, name, email, phone, project_description, quantity,
-            approx_size, deadline, material_preference, color_preference,
-            use_case, requirements, delivery_method, shipping_location,
-            additional_notes, ai_summary, status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        datetime.utcnow().isoformat(),
-        data["name"], data["email"], data.get("phone"),
-        data["project_description"], data["quantity"], data.get("approx_size"),
-        data.get("deadline"), data.get("material_preference"),
-        data.get("color_preference"), data.get("use_case"),
-        json.dumps(data.get("requirements", [])), data.get("delivery_method"),
-        data.get("shipping_location"), data.get("additional_notes"),
-        ai_summary, "New",
-    ))
-    request_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return request_id
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO quote_requests (
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    status
+                )
+                VALUES (
+                    %(created_at)s,
+                    %(name)s,
+                    %(email)s,
+                    %(phone)s,
+                    %(project_description)s,
+                    %(quantity)s,
+                    %(approx_size)s,
+                    %(deadline)s,
+                    %(material_preference)s,
+                    %(color_preference)s,
+                    %(use_case)s,
+                    %(requirements)s,
+                    %(delivery_method)s,
+                    %(shipping_location)s,
+                    %(additional_notes)s,
+                    %(uploaded_files)s,
+                    %(ai_summary)s,
+                    %(status)s
+                )
+                RETURNING id;
+                """,
+                {
+                    "created_at": datetime.now(timezone.utc),
+                    "name": data["name"],
+                    "email": data["email"],
+                    "phone": data.get("phone"),
+                    "project_description": data["project_description"],
+                    "quantity": data["quantity"],
+                    "approx_size": data.get("approx_size"),
+                    "deadline": data.get("deadline"),
+                    "material_preference": data.get("material_preference"),
+                    "color_preference": data.get("color_preference"),
+                    "use_case": data.get("use_case"),
+                    "requirements": Json(data.get("requirements", [])),
+                    "delivery_method": data.get("delivery_method"),
+                    "shipping_location": data.get("shipping_location"),
+                    "additional_notes": data.get("additional_notes"),
+                    "uploaded_files": Json(data.get("uploaded_files", [])),
+                    "ai_summary": ai_summary,
+                    "status": "New",
+                },
+            )
+
+            row = cur.fetchone()
+            return row["id"]
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
 
 
 @app.get("/")
@@ -127,13 +214,42 @@ def root():
     return {
         "ok": True,
         "app": APP_NAME,
-        "routes": ["/health", "/quote-request", "/calculate", "/admin/login", "/admin/requests", "/admin/requests/{request_id}/status"],
+        "storage": "supabase_postgres",
+        "routes": [
+            "/health",
+            "/quote-request",
+            "/calculate",
+            "/admin/login",
+            "/admin/requests",
+            "/admin/requests/{request_id}/status",
+        ],
     }
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "app": APP_NAME, "db_path": str(DB_PATH), "db_exists": DB_PATH.exists()}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS count FROM quote_requests;")
+                row = cur.fetchone()
+
+        return {
+            "ok": True,
+            "app": APP_NAME,
+            "storage": "supabase_postgres",
+            "database_configured": bool(DATABASE_URL),
+            "quote_count": row["count"],
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": APP_NAME,
+            "storage": "supabase_postgres",
+            "database_configured": bool(DATABASE_URL),
+            "error": str(exc),
+        }
 
 
 class AdminLoginRequest(BaseModel):
@@ -176,12 +292,19 @@ async def quote_request(
     files: Optional[List[UploadFile]] = File(None),
 ):
     data = {
-        "name": name, "email": email, "phone": phone,
-        "project_description": project_description, "quantity": quantity,
-        "approx_size": approx_size, "deadline": deadline,
-        "material_preference": material_preference, "color_preference": color_preference,
-        "use_case": use_case, "requirements": requirements or [],
-        "delivery_method": delivery_method, "shipping_location": shipping_location,
+        "name": name,
+        "email": email,
+        "phone": phone,
+        "project_description": project_description,
+        "quantity": quantity,
+        "approx_size": approx_size,
+        "deadline": deadline,
+        "material_preference": material_preference,
+        "color_preference": color_preference,
+        "use_case": use_case,
+        "requirements": requirements or [],
+        "delivery_method": delivery_method,
+        "shipping_location": shipping_location,
         "additional_notes": additional_notes,
         "uploaded_files": [f.filename for f in files] if files else [],
     }
@@ -203,9 +326,16 @@ async def quote_request(
     <p><strong>Deadline:</strong> {deadline or "Not provided"}</p>
     <p><strong>Delivery:</strong> {delivery_method or "Not provided"}</p>
     <p><strong>Shipping Location:</strong> {shipping_location or "Not provided"}</p>
-    <h3>Project Description</h3><p>{project_description}</p>
-    <h3>Requirements</h3><p>{", ".join(requirements or []) or "None selected"}</p>
-    <h3>Uploaded Files</h3><p>{file_list}</p>
+
+    <h3>Project Description</h3>
+    <p>{project_description}</p>
+
+    <h3>Requirements</h3>
+    <p>{", ".join(requirements or []) or "None selected"}</p>
+
+    <h3>Uploaded Files</h3>
+    <p>{file_list}</p>
+
     <h3>AI Triage Summary</h3>
     <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{ai_summary}</pre>
     """
@@ -217,7 +347,12 @@ async def quote_request(
         text_body=ai_summary,
     )
 
-    return {"success": True, "request_id": request_id, "message": "Quote request submitted successfully.", "email": email_result}
+    return {
+        "success": True,
+        "request_id": request_id,
+        "message": "Quote request submitted successfully.",
+        "email": email_result,
+    }
 
 
 class PricingRequest(BaseModel):
@@ -247,9 +382,43 @@ def calculate(request: PricingRequest):
             include_shipping=request.include_shipping,
             settings=get_pricing_settings(),
         )
+
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+
+@app.get("/admin/requests")
+def list_requests(admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    status
+                FROM quote_requests
+                ORDER BY created_at DESC
+                LIMIT 100;
+                """
+            )
+            return cur.fetchall()
 
 
 class StatusUpdateRequest(BaseModel):
@@ -257,7 +426,11 @@ class StatusUpdateRequest(BaseModel):
 
 
 @app.patch("/admin/requests/{request_id}/status")
-def update_request_status(request_id: int, request: StatusUpdateRequest, admin=Depends(verify_admin)):
+def update_request_status(
+    request_id: int,
+    request: StatusUpdateRequest,
+    admin=Depends(verify_admin),
+):
     status = request.status.strip()
 
     if status not in VALID_STATUSES:
@@ -266,33 +439,45 @@ def update_request_status(request_id: int, request: StatusUpdateRequest, admin=D
             detail=f"Invalid status. Valid statuses: {', '.join(sorted(VALID_STATUSES))}",
         )
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                {"request_id": request_id},
+            )
+            existing = cur.fetchone()
 
-    cur.execute("SELECT id FROM quote_requests WHERE id = ?", (request_id,))
-    existing = cur.fetchone()
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
 
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Quote request not found")
-
-    cur.execute("UPDATE quote_requests SET status = ? WHERE id = ?", (status, request_id))
-    conn.commit()
-
-    cur.execute("SELECT * FROM quote_requests WHERE id = ?", (request_id,))
-    updated = dict(cur.fetchone())
-    conn.close()
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET status = %(status)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    status;
+                """,
+                {"status": status, "request_id": request_id},
+            )
+            updated = cur.fetchone()
 
     return {"success": True, "request": updated}
-
-
-@app.get("/admin/requests")
-def list_requests(admin=Depends(verify_admin)):
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM quote_requests ORDER BY id DESC LIMIT 100")
-    rows = [dict(row) for row in cur.fetchall()]
-    conn.close()
-    return rows
