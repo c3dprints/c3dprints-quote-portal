@@ -222,6 +222,7 @@ def root():
             "/admin/login",
             "/admin/requests",
             "/admin/requests/{request_id}/status",
+            "/admin/requests/{request_id}/send-quote",
         ],
     }
 
