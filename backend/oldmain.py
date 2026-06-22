@@ -18,18 +18,7 @@ from pricing_engine import PricingSettings, calculate_quote
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
-DEFAULT_DB_PATH = Path(__file__).parent / "quote_requests.db"
-DB_PATH = Path(os.getenv("DB_PATH", str(DEFAULT_DB_PATH))).expanduser()
-
-VALID_STATUSES = {
-    "New",
-    "Need Info",
-    "Quoted",
-    "Approved",
-    "Printing",
-    "Completed",
-    "Archived",
-}
+DB_PATH = Path(__file__).parent / "quote_requests.db"
 
 app = FastAPI(title=APP_NAME)
 
@@ -62,7 +51,6 @@ def get_pricing_settings() -> PricingSettings:
 
 
 def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -95,7 +83,6 @@ init_db()
 
 
 def save_request(data: dict, ai_summary: str) -> int:
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
     cur.execute("""
@@ -127,13 +114,13 @@ def root():
     return {
         "ok": True,
         "app": APP_NAME,
-        "routes": ["/health", "/quote-request", "/calculate", "/admin/login", "/admin/requests", "/admin/requests/{request_id}/status"],
+        "routes": ["/health", "/quote-request", "/calculate", "/admin/login", "/admin/requests"],
     }
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "app": APP_NAME, "db_path": str(DB_PATH), "db_exists": DB_PATH.exists()}
+    return {"ok": True, "app": APP_NAME}
 
 
 class AdminLoginRequest(BaseModel):
@@ -249,42 +236,6 @@ def calculate(request: PricingRequest):
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-
-
-
-class StatusUpdateRequest(BaseModel):
-    status: str
-
-
-@app.patch("/admin/requests/{request_id}/status")
-def update_request_status(request_id: int, request: StatusUpdateRequest, admin=Depends(verify_admin)):
-    status = request.status.strip()
-
-    if status not in VALID_STATUSES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid status. Valid statuses: {', '.join(sorted(VALID_STATUSES))}",
-        )
-
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-
-    cur.execute("SELECT id FROM quote_requests WHERE id = ?", (request_id,))
-    existing = cur.fetchone()
-
-    if not existing:
-        conn.close()
-        raise HTTPException(status_code=404, detail="Quote request not found")
-
-    cur.execute("UPDATE quote_requests SET status = ? WHERE id = ?", (status, request_id))
-    conn.commit()
-
-    cur.execute("SELECT * FROM quote_requests WHERE id = ?", (request_id,))
-    updated = dict(cur.fetchone())
-    conn.close()
-
-    return {"success": True, "request": updated}
 
 
 @app.get("/admin/requests")
