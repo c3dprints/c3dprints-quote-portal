@@ -146,48 +146,18 @@ def save_request(data: dict, ai_summary: str) -> int:
             cur.execute(
                 """
                 INSERT INTO quote_requests (
-                    created_at,
-                    name,
-                    email,
-                    phone,
-                    project_description,
-                    quantity,
-                    approx_size,
-                    deadline,
-                    material_preference,
-                    color_preference,
-                    use_case,
-                    requirements,
-                    delivery_method,
-                    shipping_location,
-                    additional_notes,
-                    uploaded_files,
-                    ai_summary,
-                    final_price,
-                    deposit_paid,
-                    due_date,
-                    print_notes,
-                    status
+                    created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, status
                 )
                 VALUES (
-                    %(created_at)s,
-                    %(name)s,
-                    %(email)s,
-                    %(phone)s,
-                    %(project_description)s,
-                    %(quantity)s,
-                    %(approx_size)s,
-                    %(deadline)s,
-                    %(material_preference)s,
-                    %(color_preference)s,
-                    %(use_case)s,
-                    %(requirements)s,
-                    %(delivery_method)s,
-                    %(shipping_location)s,
-                    %(additional_notes)s,
-                    %(uploaded_files)s,
-                    %(ai_summary)s,
-                    %(status)s
+                    %(created_at)s, %(name)s, %(email)s, %(phone)s,
+                    %(project_description)s, %(quantity)s, %(approx_size)s,
+                    %(deadline)s, %(material_preference)s, %(color_preference)s,
+                    %(use_case)s, %(requirements)s, %(delivery_method)s,
+                    %(shipping_location)s, %(additional_notes)s, %(uploaded_files)s,
+                    %(ai_summary)s, %(status)s
                 )
                 RETURNING id;
                 """,
@@ -212,9 +182,7 @@ def save_request(data: dict, ai_summary: str) -> int:
                     "status": "New",
                 },
             )
-
-            row = cur.fetchone()
-            return row["id"]
+            return cur.fetchone()["id"]
 
 
 @app.on_event("startup")
@@ -619,4 +587,55 @@ def update_job_details(
             updated = cur.fetchone()
 
     return {"success": True, "request": updated}
+
+class SendQuoteRequest(BaseModel):
+    subject: str = "Your C3D Prints Custom Quote"
+    message: str
+
+
+@app.post("/admin/requests/{request_id}/send-quote")
+def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Depends(verify_admin)):
+    message = request.message.strip()
+    subject = request.subject.strip() or "Your C3D Prints Custom Quote"
+    if not message:
+        raise HTTPException(status_code=400, detail="Quote message cannot be empty")
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, email FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
+            quote_request = cur.fetchone()
+            if not quote_request:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            customer_email = quote_request["email"]
+            customer_name = quote_request["name"]
+            html_body = f"""
+            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
+              <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre>
+            </div>
+            """
+            email_result = send_quote_notification(
+                to_email=customer_email,
+                subject=subject,
+                html_body=html_body,
+                text_body=message,
+            )
+            if not email_result.get("sent"):
+                raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET status = 'Quoted'
+                WHERE id = %(request_id)s
+                RETURNING id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference, use_case,
+                    requirements, delivery_method, shipping_location, additional_notes,
+                    uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes, status;
+                """,
+                {"request_id": request_id},
+            )
+            updated = cur.fetchone()
+
+    return {"success": True, "message": f"Quote sent to {customer_name} <{customer_email}>", "email": email_result, "request": updated}
 
