@@ -117,10 +117,7 @@ def init_db():
                     final_price NUMERIC,
                     deposit_paid BOOLEAN NOT NULL DEFAULT FALSE,
                     due_date TEXT,
-                    print_notes TEXT,
-                    quoted_price NUMERIC,
-                    quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ
+                    print_notes TEXT
                 );
                 """
             )
@@ -140,9 +137,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS deposit_paid BOOLEAN NOT NULL DEFAULT FALSE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS due_date TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS print_notes TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
 
 
 
@@ -173,9 +167,6 @@ def save_request(data: dict, ai_summary: str) -> int:
                     deposit_paid,
                     due_date,
                     print_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
                     status
                 )
                 VALUES (
@@ -438,9 +429,6 @@ def list_requests(admin=Depends(verify_admin)):
                     deposit_paid,
                     due_date,
                     print_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -507,9 +495,6 @@ def update_request_status(
                     deposit_paid,
                     due_date,
                     print_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -577,9 +562,6 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
-                        quoted_price,
-                        quote_message,
-                        quote_sent_at,
                         status;
                     """,
                     {
@@ -623,9 +605,6 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
-                        quoted_price,
-                        quote_message,
-                        quote_sent_at,
                         status;
                     """,
                     {
@@ -640,30 +619,4 @@ def update_job_details(
             updated = cur.fetchone()
 
     return {"success": True, "request": updated}
-
-@app.get("/admin/analytics")
-def get_admin_analytics(admin=Depends(verify_admin)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*)::int AS total_requests,
-                    COUNT(*) FILTER (WHERE status = 'New')::int AS new_count,
-                    COUNT(*) FILTER (WHERE status = 'Need Info')::int AS need_info_count,
-                    COUNT(*) FILTER (WHERE status = 'Quoted')::int AS quoted_count,
-                    COUNT(*) FILTER (WHERE status = 'Approved')::int AS approved_count,
-                    COUNT(*) FILTER (WHERE status = 'Printing')::int AS printing_count,
-                    COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_count,
-                    COUNT(*) FILTER (WHERE status = 'Archived')::int AS archived_count,
-                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS approved_revenue,
-                    COALESCE(SUM(quoted_price) FILTER (WHERE status = 'Quoted'), 0)::float AS quoted_open_value,
-                    COALESCE(AVG(quoted_price) FILTER (WHERE quoted_price IS NOT NULL), 0)::float AS average_quote,
-                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing')), 0)::float AS active_job_value
-                FROM quote_requests;
-                """
-            )
-            summary = cur.fetchone()
-
-    return summary
 
