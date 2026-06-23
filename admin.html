@@ -14,8 +14,8 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 .layout{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 74px)}.sidebar{border-right:1px solid var(--border);background:#0d1928;padding:14px;overflow:auto}.main{padding:16px;overflow:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}.request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}.req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}.status{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 8px;font-size:12px;color:var(--muted);margin-top:8px}.status.New{color:var(--green);border-color:rgba(0,232,144,.4)}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-item{background:var(--input);border:1px solid var(--border);border-radius:10px;padding:11px}.detail-item label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.detail-item strong{color:var(--text);font-size:14px}.ai-box,.quote-box{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5;color:var(--text);font-size:14px;max-height:360px;overflow:auto}
-.calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.view-toggle{display:flex;gap:10px;margin-bottom:14px}.view-toggle button{flex:1}.kanban-board{display:grid;grid-template-columns:repeat(5,1fr);gap:12px;margin-bottom:14px}.kanban-column{background:#0d1928;border:1px solid var(--border);border-radius:16px;padding:12px;min-height:220px}.kanban-column h3{margin:0 0 10px;color:var(--blue-l);font-size:14px;display:flex;justify-content:space-between;align-items:center}.kanban-count{color:var(--muted);font-size:12px;border:1px solid var(--border);border-radius:999px;padding:2px 7px}.kanban-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:11px;margin-bottom:10px;cursor:pointer}.kanban-card:hover{border-color:var(--orange)}.kanban-card .k-name{font-weight:bold;color:var(--text);font-size:13px}.kanban-card .k-id{color:var(--orange-l);font-size:12px;margin-bottom:4px}.kanban-card .k-project{color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.kanban-card .k-price{color:var(--green);font-size:12px;margin-top:6px;font-weight:bold}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
-@media(max-width:980px){.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.job-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
+.calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
+@media(max-width:980px){.kanban-board{grid-template-columns:repeat(5,260px);}.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.job-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
 </style>
 </head>
 <body>
@@ -47,18 +47,6 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 </aside>
 
 <main class="main">
-<div class="view-toggle">
-  <button id="list-view-btn" class="secondary-btn" onclick="setViewMode('list')">List View</button>
-  <button id="kanban-view-btn" class="ghost-btn" onclick="setViewMode('kanban')">Kanban View</button>
-</div>
-
-<div id="kanban-board" class="kanban-board hidden">
-  <div class="kanban-column"><h3>New <span id="kc-new" class="kanban-count">0</span></h3><div id="kanban-New"></div></div>
-  <div class="kanban-column"><h3>Quoted <span id="kc-quoted" class="kanban-count">0</span></h3><div id="kanban-Quoted"></div></div>
-  <div class="kanban-column"><h3>Approved <span id="kc-approved" class="kanban-count">0</span></h3><div id="kanban-Approved"></div></div>
-  <div class="kanban-column"><h3>Printing <span id="kc-printing" class="kanban-count">0</span></h3><div id="kanban-Printing"></div></div>
-  <div class="kanban-column"><h3>Completed <span id="kc-completed" class="kanban-count">0</span></h3><div id="kanban-Completed"></div></div>
-</div>
 <div id="no-selection" class="card"><div class="empty">Select a quote request from the left.</div></div>
 <div id="selected-view" class="hidden">
   <div class="card"><h2>Request Details</h2><div class="detail-grid">
@@ -108,7 +96,7 @@ const LOGIN_URL=API_BASE+"/admin/login";
 const REQUESTS_URL=API_BASE+"/admin/requests";
 const CALCULATE_URL=API_BASE+"/calculate";
 
-let requests=[];let selectedRequest=null;let latestQuoteText="";let viewMode=localStorage.getItem("c3d_view_mode")||"list";
+let requests=[];let selectedRequest=null;let latestQuoteText="";
 const $=id=>document.getElementById(id);
 const money=value=>"$"+Number(value).toFixed(2);
 
@@ -167,58 +155,9 @@ async function loadRequests(){
     if(!response.ok)throw new Error("Could not load requests.");
     requests=await response.json();
     renderRequests();
-    renderKanban();
-    setViewMode(viewMode);
   }catch(error){
     $("request-list").innerHTML='<div class="empty">Error loading requests. Check login/backend/CORS.</div>';
   }
-}
-
-
-function setViewMode(mode){
-  viewMode=mode;
-  localStorage.setItem("c3d_view_mode",mode);
-  const kanban=$("kanban-board");
-  const sidebar=document.querySelector(".sidebar");
-  const listBtn=$("list-view-btn");
-  const kanbanBtn=$("kanban-view-btn");
-  if(mode==="kanban"){
-    kanban.classList.remove("hidden");
-    sidebar.style.display="none";
-    listBtn.className="ghost-btn";
-    kanbanBtn.className="secondary-btn";
-  }else{
-    kanban.classList.add("hidden");
-    sidebar.style.display="block";
-    listBtn.className="secondary-btn";
-    kanbanBtn.className="ghost-btn";
-  }
-  renderKanban();
-}
-
-function renderKanban(){
-  if(!$("kanban-board")) return;
-  const statuses=["New","Quoted","Approved","Printing","Completed"];
-  const counts={New:0,Quoted:0,Approved:0,Printing:0,Completed:0};
-  statuses.forEach(status=>{const container=$("kanban-"+status); if(container) container.innerHTML="";});
-  requests.forEach(req=>{
-    const status=req.status||"New";
-    if(!statuses.includes(status)) return;
-    counts[status]+=1;
-    const project=escapeHtml(req.project_description||"").slice(0,90);
-    const price=req.final_price||req.quoted_price;
-    const priceHtml=price?`<div class="k-price">${money(price)}</div>`:"";
-    const card=document.createElement("div");
-    card.className="kanban-card";
-    card.onclick=()=>selectRequest(req.id);
-    card.innerHTML=`<div class="k-id">#${escapeHtml(req.id)}</div><div class="k-name">${escapeHtml(req.name||"Unknown")}</div><div class="k-project">${project}${project.length>=90?"...":""}</div>${priceHtml}`;
-    $("kanban-"+status).appendChild(card);
-  });
-  $("kc-new").textContent=counts.New;
-  $("kc-quoted").textContent=counts.Quoted;
-  $("kc-approved").textContent=counts.Approved;
-  $("kc-printing").textContent=counts.Printing;
-  $("kc-completed").textContent=counts.Completed;
 }
 
 function renderRequests(){
@@ -238,7 +177,6 @@ function selectRequest(id){
   if(!selectedRequest)return;
   $("no-selection").classList.add("hidden");
   $("selected-view").classList.remove("hidden");
-  if(viewMode==="kanban"){$("selected-view").scrollIntoView({behavior:"smooth",block:"start"});}
   $("d-name").textContent=selectedRequest.name||"--";
   $("d-email").textContent=selectedRequest.email||"--";
   $("d-phone").textContent=selectedRequest.phone||"--";
