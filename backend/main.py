@@ -113,7 +113,11 @@ def init_db():
                     additional_notes TEXT,
                     uploaded_files JSONB DEFAULT '[]'::jsonb,
                     ai_summary TEXT,
-                    status TEXT NOT NULL DEFAULT 'New'
+                    status TEXT NOT NULL DEFAULT 'New',
+                    final_price NUMERIC,
+                    deposit_paid BOOLEAN NOT NULL DEFAULT FALSE,
+                    due_date TEXT,
+                    print_notes TEXT
                 );
                 """
             )
@@ -129,6 +133,11 @@ def init_db():
                 ON quote_requests (status);
                 """
             )
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS final_price NUMERIC;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS deposit_paid BOOLEAN NOT NULL DEFAULT FALSE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS due_date TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS print_notes TEXT;")
+
 
 
 def save_request(data: dict, ai_summary: str) -> int:
@@ -154,6 +163,10 @@ def save_request(data: dict, ai_summary: str) -> int:
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
                     status
                 )
                 VALUES (
@@ -222,7 +235,6 @@ def root():
             "/admin/login",
             "/admin/requests",
             "/admin/requests/{request_id}/status",
-            "/admin/requests/{request_id}/send-quote",
         ],
     }
 
@@ -413,6 +425,10 @@ def list_requests(admin=Depends(verify_admin)):
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -475,6 +491,10 @@ def update_request_status(
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -482,3 +502,121 @@ def update_request_status(
             updated = cur.fetchone()
 
     return {"success": True, "request": updated}
+
+class JobDetailsUpdateRequest(BaseModel):
+    final_price: Optional[float] = None
+    deposit_paid: bool = False
+    due_date: Optional[str] = None
+    print_notes: Optional[str] = None
+    approve: bool = False
+
+
+@app.patch("/admin/requests/{request_id}/job-details")
+def update_job_details(
+    request_id: int,
+    request: JobDetailsUpdateRequest,
+    admin=Depends(verify_admin),
+):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                {"request_id": request_id},
+            )
+            existing = cur.fetchone()
+
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            if request.approve:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        final_price = %(final_price)s,
+                        deposit_paid = %(deposit_paid)s,
+                        due_date = %(due_date)s,
+                        print_notes = %(print_notes)s,
+                        status = 'Approved'
+                    WHERE id = %(request_id)s
+                    RETURNING
+                        id,
+                        created_at,
+                        name,
+                        email,
+                        phone,
+                        project_description,
+                        quantity,
+                        approx_size,
+                        deadline,
+                        material_preference,
+                        color_preference,
+                        use_case,
+                        requirements,
+                        delivery_method,
+                        shipping_location,
+                        additional_notes,
+                        uploaded_files,
+                        ai_summary,
+                        final_price,
+                        deposit_paid,
+                        due_date,
+                        print_notes,
+                        status;
+                    """,
+                    {
+                        "request_id": request_id,
+                        "final_price": request.final_price,
+                        "deposit_paid": request.deposit_paid,
+                        "due_date": request.due_date,
+                        "print_notes": request.print_notes,
+                    },
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        final_price = %(final_price)s,
+                        deposit_paid = %(deposit_paid)s,
+                        due_date = %(due_date)s,
+                        print_notes = %(print_notes)s
+                    WHERE id = %(request_id)s
+                    RETURNING
+                        id,
+                        created_at,
+                        name,
+                        email,
+                        phone,
+                        project_description,
+                        quantity,
+                        approx_size,
+                        deadline,
+                        material_preference,
+                        color_preference,
+                        use_case,
+                        requirements,
+                        delivery_method,
+                        shipping_location,
+                        additional_notes,
+                        uploaded_files,
+                        ai_summary,
+                        final_price,
+                        deposit_paid,
+                        due_date,
+                        print_notes,
+                        status;
+                    """,
+                    {
+                        "request_id": request_id,
+                        "final_price": request.final_price,
+                        "deposit_paid": request.deposit_paid,
+                        "due_date": request.due_date,
+                        "print_notes": request.print_notes,
+                    },
+                )
+
+            updated = cur.fetchone()
+
+    return {"success": True, "request": updated}
+
