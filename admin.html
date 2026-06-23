@@ -11,7 +11,7 @@
 .primary-btn{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:bold;letter-spacing:1px;cursor:pointer}.secondary-btn{background:linear-gradient(135deg,#005f8f,#00aaff);color:white;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.ghost-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:10px 12px;cursor:pointer}
 #login-error,.error{color:var(--red);margin-top:10px;font-size:14px}#app{display:none;min-height:100vh}
 header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10}header h1{margin:0;color:var(--blue-l);font-size:20px}header p{margin:4px 0 0;color:var(--muted);font-size:13px}.header-actions{display:flex;gap:10px;align-items:center}
-.layout{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 74px)}.sidebar{border-right:1px solid var(--border);background:#0d1928;padding:14px;overflow:auto}.main{padding:16px;overflow:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
+.layout{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 74px)}.sidebar{border-right:1px solid var(--border);background:#0d1928;padding:14px;overflow:auto}.main{padding:16px;overflow:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}.analytics-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}.metric-card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:14px}.metric-card .metric-value{font-size:24px;color:var(--green);font-weight:bold}.metric-card .metric-label{color:var(--muted);font-size:12px;margin-top:4px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}.request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}.req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}.status{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 8px;font-size:12px;color:var(--muted);margin-top:8px}.status.New{color:var(--green);border-color:rgba(0,232,144,.4)}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-item{background:var(--input);border:1px solid var(--border);border-radius:10px;padding:11px}.detail-item label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.detail-item strong{color:var(--text);font-size:14px}.ai-box,.quote-box{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5;color:var(--text);font-size:14px;max-height:360px;overflow:auto}
 .calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
@@ -35,7 +35,7 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
   <div><h1>C3D Prints Admin Dashboard</h1><p>Quote queue, AI triage, and pricing calculator</p></div>
   <div class="header-actions">
     <button class="ghost-btn" onclick="window.location.href='https://quote.c3dprints.com'">Quote Portal</button>
-    <button class="ghost-btn" onclick="loadRequests()">Refresh</button>
+    <button class="ghost-btn" onclick="loadAnalytics();loadRequests()">Refresh</button>
     <button class="ghost-btn" onclick="logout()">Logout</button>
   </div>
 </header>
@@ -47,6 +47,16 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 </aside>
 
 <main class="main">
+<div id="analytics-grid" class="analytics-grid">
+  <div class="metric-card"><div class="metric-value" id="m-new">--</div><div class="metric-label">New Requests</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-quoted">--</div><div class="metric-label">Quoted</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-approved">--</div><div class="metric-label">Approved</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-printing">--</div><div class="metric-label">Printing</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-completed">--</div><div class="metric-label">Completed</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-open-value">$--</div><div class="metric-label">Open Quote Value</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-active-value">$--</div><div class="metric-label">Active Job Value</div></div>
+  <div class="metric-card"><div class="metric-value" id="m-average">$--</div><div class="metric-label">Average Quote</div></div>
+</div>
 <div id="no-selection" class="card"><div class="empty">Select a quote request from the left.</div></div>
 <div id="selected-view" class="hidden">
   <div class="card"><h2>Request Details</h2><div class="detail-grid">
@@ -106,6 +116,7 @@ const API_BASE="https://c3dprints-quote-portal.onrender.com";
 const LOGIN_URL=API_BASE+"/admin/login";
 const REQUESTS_URL=API_BASE+"/admin/requests";
 const CALCULATE_URL=API_BASE+"/calculate";
+const ANALYTICS_URL=API_BASE+"/admin/analytics";
 
 let requests=[];let selectedRequest=null;let latestQuoteText="";
 const $=id=>document.getElementById(id);
@@ -139,6 +150,7 @@ async function adminLogin(){
 function showApp(){
   $("login-gate").style.display="none";
   $("app").style.display="block";
+  loadAnalytics();
   loadRequests();
 }
 
@@ -153,6 +165,32 @@ async function apiFetch(url, options={}){
   const headers=options.headers||{};
   headers["Authorization"]="Bearer "+getToken();
   return fetch(url,{...options,headers});
+}
+
+
+async function loadAnalytics(){
+  try{
+    const response=await apiFetch(ANALYTICS_URL);
+    if(response.status===401){
+      clearToken();
+      location.reload();
+      return;
+    }
+    if(!response.ok) return;
+
+    const data=await response.json();
+
+    $("m-new").textContent=data.new_count ?? 0;
+    $("m-quoted").textContent=data.quoted_count ?? 0;
+    $("m-approved").textContent=data.approved_count ?? 0;
+    $("m-printing").textContent=data.printing_count ?? 0;
+    $("m-completed").textContent=data.completed_count ?? 0;
+    $("m-open-value").textContent=money(data.quoted_open_value ?? 0);
+    $("m-active-value").textContent=money(data.active_job_value ?? 0);
+    $("m-average").textContent=money(data.average_quote ?? 0);
+  }catch(error){
+    // Keep dashboard usable even if analytics fails.
+  }
 }
 
 async function loadRequests(){

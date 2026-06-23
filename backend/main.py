@@ -641,3 +641,29 @@ def update_job_details(
 
     return {"success": True, "request": updated}
 
+@app.get("/admin/analytics")
+def get_admin_analytics(admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    COUNT(*)::int AS total_requests,
+                    COUNT(*) FILTER (WHERE status = 'New')::int AS new_count,
+                    COUNT(*) FILTER (WHERE status = 'Need Info')::int AS need_info_count,
+                    COUNT(*) FILTER (WHERE status = 'Quoted')::int AS quoted_count,
+                    COUNT(*) FILTER (WHERE status = 'Approved')::int AS approved_count,
+                    COUNT(*) FILTER (WHERE status = 'Printing')::int AS printing_count,
+                    COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_count,
+                    COUNT(*) FILTER (WHERE status = 'Archived')::int AS archived_count,
+                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS approved_revenue,
+                    COALESCE(SUM(quoted_price) FILTER (WHERE status = 'Quoted'), 0)::float AS quoted_open_value,
+                    COALESCE(AVG(quoted_price) FILTER (WHERE quoted_price IS NOT NULL), 0)::float AS average_quote,
+                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing')), 0)::float AS active_job_value
+                FROM quote_requests;
+                """
+            )
+            summary = cur.fetchone()
+
+    return summary
+
