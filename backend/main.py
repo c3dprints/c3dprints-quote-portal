@@ -1,11 +1,11 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import psycopg
-import requests
 from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
@@ -23,11 +23,6 @@ load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
 DATABASE_URL = os.getenv("DATABASE_URL")
-
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
-
 
 VALID_STATUSES = {
     "New",
@@ -77,79 +72,6 @@ def get_conn():
     )
 
 
-
-def safe_storage_filename(filename: str) -> str:
-    name = os.path.basename(filename or "uploaded-file")
-    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
-    return name or "uploaded-file"
-
-
-def storage_enabled() -> bool:
-    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_STORAGE_BUCKET)
-
-
-def upload_file_to_supabase_storage(request_id: int, file: UploadFile) -> Optional[dict]:
-    if not storage_enabled():
-        return None
-
-    filename = safe_storage_filename(file.filename)
-    storage_path = f"quote-requests/{request_id}/{filename}"
-    upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
-
-    contents = file.file.read()
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "x-upsert": "true",
-        "Content-Type": file.content_type or "application/octet-stream",
-    }
-
-    response = requests.post(upload_url, headers=headers, data=contents, timeout=60)
-
-    if response.status_code not in (200, 201):
-        raise HTTPException(
-            status_code=500,
-            detail=f"File upload failed for {filename}: {response.text}",
-        )
-
-    return {
-        "filename": filename,
-        "original_filename": file.filename,
-        "storage_path": storage_path,
-        "bucket": SUPABASE_STORAGE_BUCKET,
-        "content_type": file.content_type,
-        "size_bytes": len(contents),
-    }
-
-
-def create_signed_file_url(storage_path: str, expires_in: int = 3600) -> str:
-    if not storage_enabled():
-        raise HTTPException(status_code=500, detail="Supabase Storage is not configured")
-
-    sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
-    headers = {
-        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
-        "apikey": SUPABASE_SERVICE_ROLE_KEY,
-        "Content-Type": "application/json",
-    }
-
-    response = requests.post(sign_url, headers=headers, json={"expiresIn": expires_in}, timeout=30)
-
-    if response.status_code not in (200, 201):
-        raise HTTPException(status_code=500, detail=f"Could not create signed file URL: {response.text}")
-
-    data = response.json()
-    signed_url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
-
-    if not signed_url:
-        raise HTTPException(status_code=500, detail="Supabase did not return a signed URL")
-
-    if signed_url.startswith("http"):
-        return signed_url
-
-    return f"{SUPABASE_URL}/storage/v1{signed_url}"
-
-
 def get_pricing_settings() -> PricingSettings:
     return PricingSettings(
         kwh=float(os.getenv("DEFAULT_KWH", 0.33)),
@@ -196,12 +118,7 @@ def init_db():
                     final_price NUMERIC,
                     deposit_paid BOOLEAN NOT NULL DEFAULT FALSE,
                     due_date TEXT,
-                    print_notes TEXT,
-                    actual_cost NUMERIC,
-                    profit_notes TEXT,
-                    quoted_price NUMERIC,
-                    quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ
+                    print_notes TEXT
                 );
                 """
             )
@@ -221,11 +138,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS deposit_paid BOOLEAN NOT NULL DEFAULT FALSE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS due_date TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS print_notes TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS actual_cost NUMERIC;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS profit_notes TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
 
 
 
@@ -252,6 +164,10 @@ def save_request(data: dict, ai_summary: str) -> int:
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
                     status
                 )
                 VALUES (
@@ -297,20 +213,9 @@ def save_request(data: dict, ai_summary: str) -> int:
                     "status": "New",
                 },
             )
-            return cur.fetchone()["id"]
 
-
-def update_request_files(request_id: int, uploaded_files: list) -> None:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE quote_requests
-                SET uploaded_files = %(uploaded_files)s
-                WHERE id = %(request_id)s;
-                """,
-                {"uploaded_files": Json(uploaded_files), "request_id": request_id},
-            )
+            row = cur.fetchone()
+            return row["id"]
 
 
 @app.on_event("startup")
@@ -421,22 +326,8 @@ async def quote_request(
     ai_summary = ai_triage_summary(data)
     request_id = save_request(data, ai_summary)
 
-    stored_files = []
-    if files:
-        for file in files:
-            if storage_enabled():
-                stored = upload_file_to_supabase_storage(request_id, file)
-                if stored:
-                    stored_files.append(stored)
-            else:
-                stored_files.append({"filename": file.filename, "original_filename": file.filename})
-
-    if stored_files:
-        data["uploaded_files"] = stored_files
-        update_request_files(request_id, stored_files)
-
     notify_email = os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com")
-    file_list = "<br>".join([f.get("original_filename") or f.get("filename") if isinstance(f, dict) else str(f) for f in data["uploaded_files"]]) if data["uploaded_files"] else "No files uploaded"
+    file_list = "<br>".join(data["uploaded_files"]) if data["uploaded_files"] else "No files uploaded"
 
     html_body = f"""
     <h2>New C3D Prints Quote Request #{request_id}</h2>
@@ -539,11 +430,6 @@ def list_requests(admin=Depends(verify_admin)):
                     deposit_paid,
                     due_date,
                     print_notes,
-                    actual_cost,
-                    profit_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -610,11 +496,6 @@ def update_request_status(
                     deposit_paid,
                     due_date,
                     print_notes,
-                    actual_cost,
-                    profit_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -628,8 +509,6 @@ class JobDetailsUpdateRequest(BaseModel):
     deposit_paid: bool = False
     due_date: Optional[str] = None
     print_notes: Optional[str] = None
-    actual_cost: Optional[float] = None
-    profit_notes: Optional[str] = None
     approve: bool = False
 
 
@@ -659,8 +538,6 @@ def update_job_details(
                         deposit_paid = %(deposit_paid)s,
                         due_date = %(due_date)s,
                         print_notes = %(print_notes)s,
-                        actual_cost = %(actual_cost)s,
-                        profit_notes = %(profit_notes)s,
                         status = 'Approved'
                     WHERE id = %(request_id)s
                     RETURNING
@@ -686,11 +563,6 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
-                        actual_cost,
-                        profit_notes,
-                        quoted_price,
-                        quote_message,
-                        quote_sent_at,
                         status;
                     """,
                     {
@@ -699,8 +571,6 @@ def update_job_details(
                         "deposit_paid": request.deposit_paid,
                         "due_date": request.due_date,
                         "print_notes": request.print_notes,
-                        "actual_cost": request.actual_cost,
-                        "profit_notes": request.profit_notes,
                     },
                 )
             else:
@@ -711,9 +581,7 @@ def update_job_details(
                         final_price = %(final_price)s,
                         deposit_paid = %(deposit_paid)s,
                         due_date = %(due_date)s,
-                        print_notes = %(print_notes)s,
-                        actual_cost = %(actual_cost)s,
-                        profit_notes = %(profit_notes)s
+                        print_notes = %(print_notes)s
                     WHERE id = %(request_id)s
                     RETURNING
                         id,
@@ -738,11 +606,6 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
-                        actual_cost,
-                        profit_notes,
-                        quoted_price,
-                        quote_message,
-                        quote_sent_at,
                         status;
                     """,
                     {
@@ -751,8 +614,6 @@ def update_job_details(
                         "deposit_paid": request.deposit_paid,
                         "due_date": request.due_date,
                         "print_notes": request.print_notes,
-                        "actual_cost": request.actual_cost,
-                        "profit_notes": request.profit_notes,
                     },
                 )
 
@@ -760,68 +621,3 @@ def update_job_details(
 
     return {"success": True, "request": updated}
 
-@app.get("/admin/analytics")
-def get_admin_analytics(admin=Depends(verify_admin)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    COUNT(*)::int AS total_requests,
-                    COUNT(*) FILTER (WHERE status = 'New')::int AS new_count,
-                    COUNT(*) FILTER (WHERE status = 'Need Info')::int AS need_info_count,
-                    COUNT(*) FILTER (WHERE status = 'Quoted')::int AS quoted_count,
-                    COUNT(*) FILTER (WHERE status = 'Approved')::int AS approved_count,
-                    COUNT(*) FILTER (WHERE status = 'Printing')::int AS printing_count,
-                    COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_count,
-                    COUNT(*) FILTER (WHERE status = 'Archived')::int AS archived_count,
-                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS approved_revenue,
-                    COALESCE(SUM(quoted_price) FILTER (WHERE status = 'Quoted'), 0)::float AS quoted_open_value,
-                    COALESCE(AVG(quoted_price) FILTER (WHERE quoted_price IS NOT NULL), 0)::float AS average_quote,
-                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing')), 0)::float AS active_job_value,
-                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS revenue_tracked,
-                    COALESCE(SUM(actual_cost) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS actual_cost_tracked,
-                    COALESCE(SUM(final_price - COALESCE(actual_cost,0)) FILTER (WHERE status IN ('Approved','Printing','Completed') AND final_price IS NOT NULL), 0)::float AS estimated_profit,
-                    COALESCE(AVG(final_price - COALESCE(actual_cost,0)) FILTER (WHERE status IN ('Approved','Printing','Completed') AND final_price IS NOT NULL), 0)::float AS average_profit
-                FROM quote_requests;
-                """
-            )
-            summary = cur.fetchone()
-
-    return summary
-
-@app.get("/admin/requests/{request_id}/files/{file_index}/download")
-def get_quote_file_download_url(
-    request_id: int,
-    file_index: int,
-    admin=Depends(verify_admin),
-):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT uploaded_files FROM quote_requests WHERE id = %(request_id)s;",
-                {"request_id": request_id},
-            )
-            row = cur.fetchone()
-
-    if not row:
-        raise HTTPException(status_code=404, detail="Quote request not found")
-
-    uploaded_files = row.get("uploaded_files") or []
-
-    if file_index < 0 or file_index >= len(uploaded_files):
-        raise HTTPException(status_code=404, detail="File not found")
-
-    file_info = uploaded_files[file_index]
-
-    if not isinstance(file_info, dict) or not file_info.get("storage_path"):
-        raise HTTPException(status_code=404, detail="This file does not have cloud storage metadata")
-
-    signed_url = create_signed_file_url(file_info["storage_path"])
-
-    return {
-        "success": True,
-        "filename": file_info.get("original_filename") or file_info.get("filename"),
-        "url": signed_url,
-        "expires_in_seconds": 3600,
-    }
