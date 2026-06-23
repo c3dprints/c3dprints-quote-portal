@@ -5,17 +5,17 @@
 <title>C3D Prints Admin Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style>
-:root{--bg:#0b1623;--surface:#111e2e;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#00aaff;--blue-l:#33ccff;--orange:#ff6b1a;--orange-l:#ff8c3a;--green:#00e890;--yellow:#ffd700;--red:#ff3d5a;--text:#ddeeff;--muted:#7fa0bd}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}button,input,select,textarea{font-family:inherit}
+:root{--bg:#0b1623;--surface:#111e2e;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#00aaff;--blue-l:#33ccff;--orange:#ff6b1a;--orange-l:#ff8c3a;--green:#00e890;--red:#ff3d5a;--text:#ddeeff;--muted:#7fa0bd}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}button,input,select{font-family:inherit}
 #login-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}.gate-card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px;text-align:center}.gate-card h1{color:var(--blue-l);margin:0 0 8px}.gate-card p{color:var(--muted);margin:0 0 18px}.gate-card input{width:100%;background:var(--input);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:13px;font-size:16px;margin-bottom:12px}
-.primary-btn{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:bold;letter-spacing:1px;cursor:pointer}.secondary-btn{background:linear-gradient(135deg,#005f8f,#00aaff);color:white;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.send-btn{background:linear-gradient(135deg,#008f5f,#00e890);color:#07140e;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.ghost-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:10px 12px;cursor:pointer}
-#login-error,.error{color:var(--red);margin-top:10px;font-size:14px}.success-msg{color:var(--green);margin-top:10px;font-size:14px}#app{display:none;min-height:100vh}
+.primary-btn{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:bold;letter-spacing:1px;cursor:pointer}.secondary-btn{background:linear-gradient(135deg,#005f8f,#00aaff);color:white;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.ghost-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:10px 12px;cursor:pointer}
+#login-error,.error{color:var(--red);margin-top:10px;font-size:14px}#app{display:none;min-height:100vh}
 header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10}header h1{margin:0;color:var(--blue-l);font-size:20px}header p{margin:4px 0 0;color:var(--muted);font-size:13px}.header-actions{display:flex;gap:10px;align-items:center}
 .layout{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 74px)}.sidebar{border-right:1px solid var(--border);background:#0d1928;padding:14px;overflow:auto}.main{padding:16px;overflow:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
-.request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}.request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}.req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}.status{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 8px;font-size:12px;color:var(--muted);margin-top:8px}.status-New{color:var(--green);border-color:rgba(0,232,144,.4)}.status-Need-Info{color:var(--yellow);border-color:rgba(255,215,0,.45)}.status-Quoted{color:var(--blue-l);border-color:rgba(51,204,255,.45)}.status-Approved{color:var(--green);border-color:rgba(0,232,144,.45)}.status-Printing{color:var(--orange-l);border-color:rgba(255,140,58,.45)}.status-Completed{color:var(--muted);border-color:var(--border)}.status-Archived{color:var(--muted);border-color:var(--border);opacity:.7}
-.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-item{background:var(--input);border:1px solid var(--border);border-radius:10px;padding:11px}.detail-item label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.detail-item strong{color:var(--text);font-size:14px}.ai-box,.quote-box{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5;color:var(--text);font-size:14px;max-height:360px;overflow:auto}.quote-edit{width:100%;min-height:190px;background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;color:var(--text);font-size:14px;line-height:1.5;resize:vertical}
-.calc-grid,.job-grid,.status-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
-@media(max-width:980px){.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.job-grid,.status-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
+.request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}.request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}.req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}.status{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 8px;font-size:12px;color:var(--muted);margin-top:8px}.status.New{color:var(--green);border-color:rgba(0,232,144,.4)}
+.detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-item{background:var(--input);border:1px solid var(--border);border-radius:10px;padding:11px}.detail-item label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.detail-item strong{color:var(--text);font-size:14px}.ai-box,.quote-box{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5;color:var(--text);font-size:14px;max-height:360px;overflow:auto}
+.calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
+@media(max-width:980px){.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.job-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
 </style>
 </head>
 <body>
@@ -59,17 +59,9 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
     <div class="detail-item"><label>Color</label><strong id="d-color">--</strong></div>
     <div class="detail-item"><label>Deadline</label><strong id="d-deadline">--</strong></div>
     <div class="detail-item"><label>Use Case</label><strong id="d-use">--</strong></div>
-    <div class="detail-item"><label>Delivery</label><strong id="d-delivery">--</strong></div><div class="detail-item"><label>Final Price</label><strong id="d-final-price">--</strong></div><div class="detail-item"><label>Deposit Paid</label><strong id="d-deposit-paid">--</strong></div><div class="detail-item"><label>Due Date</label><strong id="d-due-date">--</strong></div>
+    <div class="detail-item"><label>Delivery</label><strong id="d-delivery">--</strong></div><div class="detail-item"><label>Final Price</label><strong id="d-final-price">--</strong></div><div class="detail-item"><label>Deposit Paid</label><strong id="d-deposit-paid">--</strong></div><div class="detail-item"><label>Due Date</label><strong id="d-due-date">--</strong></div><div class="detail-item"><label>Quoted Price</label><strong id="d-quoted-price">--</strong></div><div class="detail-item"><label>Quote Sent At</label><strong id="d-quote-sent-at">--</strong></div>
   </div></div>
-  <div class="card"><h2>Status Management</h2>
-  <div class="status-grid">
-    <div class="field"><label>Update Status</label><select id="status-select"><option>New</option><option>Need Info</option><option>Quoted</option><option>Approved</option><option>Printing</option><option>Completed</option><option>Archived</option></select></div>
-    <div class="field"><label>&nbsp;</label><button class="secondary-btn" onclick="updateStatus()">Save Status</button></div>
-  </div>
-  <div id="status-message" class="success-msg"></div>
-  <div id="status-error" class="error"></div>
-</div>
-<div class="card"><h2>Job Management</h2>
+  <div class="card"><h2>Job Management</h2>
   <div class="job-grid">
     <div class="field"><label>Final Agreed Price ($)</label><input id="job-final-price" type="number" min="0" step="0.01" placeholder="0.00"></div>
     <div class="field"><label>Deposit Paid?</label><select id="job-deposit-paid"><option value="false">No</option><option value="true">Yes</option></select></div>
@@ -86,13 +78,24 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
     <div class="field"><label>Filament Used (grams)</label><input id="grams" type="number" step="0.1" placeholder="100"></div>
     <div class="field"><label>Print Time (hours)</label><input id="hours" type="number" step="0.1" placeholder="6.5"></div>
     <div class="field"><label>Quantity</label><input id="quantity" type="number" min="1" value="1"></div>
-    <div class="field"><label>Fail Rate (%)</label><input id="fail_rate" type="number" min="0" max="99" step="1" value="30"></div>
+    <div class="field"><label>Fail Rate (%)</label><input id="fail_rate" type="number" min="0" max="99" step="1" value="0"></div>
     <div class="field"><label>Complexity</label><select id="complexity_multiplier"><option value="1">Easy / normal — 1.0x</option><option value="1.25">Medium / supports — 1.25x</option><option value="1.5">Hard / annoying — 1.5x</option><option value="2">Tight fit / risky — 2.0x</option></select></div>
     <div class="field"><label>Shipping</label><select id="include_shipping"><option value="true">Include shipping</option><option value="false">Pickup / no shipping</option></select></div>
   </div>
   <div class="action-row"><button class="primary-btn" onclick="calculateQuote()">Calculate Quote</button><button class="secondary-btn" onclick="copyCustomerEmail()">Copy Customer Email</button></div><div id="calc-error" class="error"></div>
   <div id="calc-results" class="results-grid hidden"><div class="result-cell"><div class="value" id="r-sell-total">$--</div><div class="label">Sell Total</div></div><div class="result-cell"><div class="value" id="r-sell-unit">$--</div><div class="label">Sell / Unit</div></div><div class="result-cell"><div class="value" id="r-cost-unit">$--</div><div class="label">Cost / Unit</div></div><div class="result-cell"><div class="value" id="r-profit-unit">$--</div><div class="label">Profit / Unit</div></div></div></div>
-  <div class="card"><h2>Customer Reply Draft</h2><textarea id="customer-quote" class="quote-edit">Calculate a quote to generate reply text.</textarea><div class="action-row"><button class="secondary-btn" onclick="copyCustomerQuote()">Copy Quote Text</button><button class="send-btn" onclick="sendQuoteEmail()">Send Quote Email</button><button class="ghost-btn" onclick="openEmailClient()">Open Email Client</button></div><div id="send-message" class="success-msg"></div><div id="send-error" class="error"></div></div>
+  <div class="card"><h2>Quote History</h2>
+  <div class="detail-grid">
+    <div class="detail-item"><label>Last Quoted Price</label><strong id="qh-price">--</strong></div>
+    <div class="detail-item"><label>Last Sent At</label><strong id="qh-sent-at">--</strong></div>
+  </div>
+  <div style="margin-top:12px;">
+    <label style="display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px;">Last Quote Message</label>
+    <div id="qh-message" class="quote-box">No quote sent yet.</div>
+  </div>
+  <div class="action-row"><button class="secondary-btn" onclick="copySavedQuote()">Copy Saved Quote</button></div>
+</div>
+<div class="card"><h2>Customer Reply Draft</h2><div id="customer-quote" class="quote-box">Calculate a quote to generate reply text.</div><div class="action-row"><button class="secondary-btn" onclick="copyCustomerQuote()">Copy Quote Text</button><button class="ghost-btn" onclick="openEmailClient()">Open Email Client</button></div></div>
 </div>
 </main>
 </div>
@@ -107,6 +110,7 @@ const CALCULATE_URL=API_BASE+"/calculate";
 let requests=[];let selectedRequest=null;let latestQuoteText="";
 const $=id=>document.getElementById(id);
 const money=value=>"$"+Number(value).toFixed(2);
+function formatDateTime(value){if(!value)return "--";try{return new Date(value).toLocaleString();}catch(e){return value;}}
 
 function getToken(){return localStorage.getItem("c3d_admin_token")}
 function setToken(token){localStorage.setItem("c3d_admin_token",token)}
@@ -148,7 +152,6 @@ if(getToken()){showApp()}
 async function apiFetch(url, options={}){
   const headers=options.headers||{};
   headers["Authorization"]="Bearer "+getToken();
-  if(options.body && !headers["Content-Type"]) headers["Content-Type"]="application/json";
   return fetch(url,{...options,headers});
 }
 
@@ -169,8 +172,6 @@ async function loadRequests(){
   }
 }
 
-function statusClass(status){return "status-"+String(status||"New").replaceAll(" ","-");}
-
 function renderRequests(){
   const query=$("search").value.toLowerCase().trim();
   const filtered=requests.filter(req=>[req.id,req.name,req.email,req.project_description,req.material_preference,req.status].join(" ").toLowerCase().includes(query));
@@ -179,7 +180,7 @@ function renderRequests(){
     const active=selectedRequest&&selectedRequest.id===req.id?"active":"";
     const project=escapeHtml(req.project_description||"").slice(0,115);
     const date=req.created_at?new Date(req.created_at).toLocaleString():"No date";
-    return `<div class="request-card ${active}" onclick="selectRequest(${req.id})"><div class="req-top"><div><div class="req-id">#${req.id}</div><div class="req-name">${escapeHtml(req.name||"Unknown")}</div></div><div class="req-date">${escapeHtml(date)}</div></div><div class="req-project">${project}${project.length>=115?"...":""}</div><span class="status ${statusClass(req.status||"New")}">${escapeHtml(req.status||"New")}</span></div>`;
+    return `<div class="request-card ${active}" onclick="selectRequest(${req.id})"><div class="req-top"><div><div class="req-id">#${req.id}</div><div class="req-name">${escapeHtml(req.name||"Unknown")}</div></div><div class="req-date">${escapeHtml(date)}</div></div><div class="req-project">${project}${project.length>=115?"...":""}</div><span class="status ${escapeHtml(req.status||"New")}">${escapeHtml(req.status||"New")}</span></div>`;
   }).join("");
 }
 
@@ -192,19 +193,17 @@ function selectRequest(id){
   $("d-email").textContent=selectedRequest.email||"--";
   $("d-phone").textContent=selectedRequest.phone||"--";
   $("d-status").textContent=selectedRequest.status||"New";
-  if($("status-select")) $("status-select").value=selectedRequest.status||"New";
   $("d-quantity").textContent=selectedRequest.quantity||"1";
   $("d-material").textContent=selectedRequest.material_preference||"Not sure";
   $("d-color").textContent=selectedRequest.color_preference||"--";
   $("d-deadline").textContent=selectedRequest.deadline||"--";
   $("d-use").textContent=selectedRequest.use_case||"--";
-  $("d-delivery").textContent=selectedRequest.delivery_method||"--";$("d-final-price").textContent=selectedRequest.final_price?money(selectedRequest.final_price):"--";$("d-deposit-paid").textContent=selectedRequest.deposit_paid?"Yes":"No";$("d-due-date").textContent=selectedRequest.due_date||"--";
+  $("d-delivery").textContent=selectedRequest.delivery_method||"--";$("d-final-price").textContent=selectedRequest.final_price?money(selectedRequest.final_price):"--";$("d-deposit-paid").textContent=selectedRequest.deposit_paid?"Yes":"No";$("d-due-date").textContent=selectedRequest.due_date||"--";$("d-quoted-price").textContent=selectedRequest.quoted_price?money(selectedRequest.quoted_price):"--";$("d-quote-sent-at").textContent=formatDateTime(selectedRequest.quote_sent_at);$("qh-price").textContent=selectedRequest.quoted_price?money(selectedRequest.quoted_price):"--";$("qh-sent-at").textContent=formatDateTime(selectedRequest.quote_sent_at);$("qh-message").textContent=selectedRequest.quote_message||"No quote sent yet.";
   $("d-project").textContent=selectedRequest.project_description||"--";
   $("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";
-  $("status-message").textContent="";$("status-error").textContent="";$("job-message").textContent="";$("job-error").textContent="";$("send-message").textContent="";$("send-error").textContent="";
   $("quantity").value=selectedRequest.quantity||1;$("job-final-price").value=selectedRequest.final_price||"";$("job-deposit-paid").value=selectedRequest.deposit_paid?"true":"false";$("job-due-date").value=selectedRequest.due_date||"";$("job-print-notes").value=selectedRequest.print_notes||"";
   $("calc-results").classList.add("hidden");
-  $("customer-quote").value="Calculate a quote to generate reply text.";
+  $("customer-quote").textContent="Calculate a quote to generate reply text.";
   latestQuoteText="";
   renderRequests();
 }
@@ -223,74 +222,21 @@ async function calculateQuote(){
     $("r-profit-unit").textContent=money(data.per_unit.profit);
     $("calc-results").classList.remove("hidden");
     latestQuoteText=buildReplyWithCustomer(data.customer_quote);
-    $("customer-quote").value=latestQuoteText;
+    $("customer-quote").textContent=latestQuoteText;
   }catch(error){
     $("calc-error").textContent=error.message||"Something went wrong.";
   }
 }
-
-
-async function updateStatus(){
-  if(!selectedRequest)return;
-  $("status-message").textContent="";$("status-error").textContent="";
-  try{
-    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/status`,{method:"PATCH",body:JSON.stringify({status:$("status-select").value})});
-    if(!response.ok){const problem=await response.json().catch(()=>({detail:"Status update failed"}));throw new Error(problem.detail||"Status update failed")}
-    const data=await response.json();
-    const idx=requests.findIndex(r=>r.id===selectedRequest.id); if(idx>=0)requests[idx]=data.request;
-    selectedRequest=data.request; $("d-status").textContent=data.request.status; $("status-select").value=data.request.status;
-    $("status-message").textContent="Status saved."; renderRequests();
-  }catch(error){$("status-error").textContent=error.message||"Status update failed"}
-}
-
-async function saveJobDetails(approve){
-  if(!selectedRequest){alert("Select a request first.");return}
-  $("job-message").textContent="";$("job-error").textContent="";
-  const finalPriceRaw=$("job-final-price").value;
-  const payload={final_price:finalPriceRaw===""?null:Number(finalPriceRaw),deposit_paid:$("job-deposit-paid").value==="true",due_date:$("job-due-date").value||null,print_notes:$("job-print-notes").value||null,approve:approve};
-  if(approve&&!confirm("Approve this job and change status to Approved?"))return;
-  try{
-    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/job-details`,{method:"PATCH",body:JSON.stringify(payload)});
-    if(!response.ok){const problem=await response.json().catch(()=>({detail:"Job update failed"}));throw new Error(problem.detail||"Job update failed")}
-    const data=await response.json();
-    const idx=requests.findIndex(r=>r.id===selectedRequest.id); if(idx>=0)requests[idx]=data.request;
-    selectedRequest=data.request;
-    $("d-status").textContent=data.request.status; if($("status-select"))$("status-select").value=data.request.status;
-    $("d-final-price").textContent=data.request.final_price?money(data.request.final_price):"--";
-    $("d-deposit-paid").textContent=data.request.deposit_paid?"Yes":"No";
-    $("d-due-date").textContent=data.request.due_date||"--";
-    $("job-final-price").value=data.request.final_price||""; $("job-deposit-paid").value=data.request.deposit_paid?"true":"false";
-    $("job-due-date").value=data.request.due_date||""; $("job-print-notes").value=data.request.print_notes||"";
-    $("job-message").textContent=approve?"Job approved. Status changed to Approved.":"Job details saved.";
-    renderRequests();
-  }catch(error){$("job-error").textContent=error.message||"Job update failed"}
-}
-
-async function sendQuoteEmail(){
-  if(!selectedRequest){alert("Select a request first.");return}
-  $("send-message").textContent="";$("send-error").textContent="";
-  const quoteText=$("customer-quote").value.trim();
-  if(!quoteText||quoteText==="Calculate a quote to generate reply text."){$("send-error").textContent="Calculate or write a quote before sending.";return}
-  if(!confirm(`Send quote email to ${selectedRequest.email}?`))return;
-  try{
-    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/send-quote`,{method:"POST",body:JSON.stringify({subject:"Your C3D Prints Custom Quote",message:quoteText})});
-    if(!response.ok){const problem=await response.json().catch(()=>({detail:"Send failed"}));throw new Error(problem.detail||"Send failed")}
-    const data=await response.json();
-    const idx=requests.findIndex(r=>r.id===selectedRequest.id); if(idx>=0)requests[idx]=data.request;
-    selectedRequest=data.request; $("d-status").textContent=data.request.status; if($("status-select"))$("status-select").value=data.request.status;
-    $("send-message").textContent="Quote email sent. Status changed to Quoted."; renderRequests();
-  }catch(error){$("send-error").textContent=error.message||"Send failed"}
-}
-
 
 function buildReplyWithCustomer(quoteText){
   const firstName=selectedRequest&&selectedRequest.name?selectedRequest.name.split(" ")[0]:"there";
   return `Hi ${firstName},\n\n${quoteText}\n\nThank you,\nC3D Prints`;
 }
 
-async function copyCustomerQuote(){const text=$("customer-quote").value;await navigator.clipboard.writeText(text);alert("Quote text copied.")}
+async function copySavedQuote(){if(!selectedRequest||!selectedRequest.quote_message){alert("No saved quote message yet.");return}await navigator.clipboard.writeText(selectedRequest.quote_message);alert("Saved quote copied.")}
+async function copyCustomerQuote(){const text=latestQuoteText||$("customer-quote").textContent;await navigator.clipboard.writeText(text);alert("Quote text copied.")}
 async function copyCustomerEmail(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}await navigator.clipboard.writeText(selectedRequest.email);alert("Customer email copied.")}
-function openEmailClient(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}const subject=encodeURIComponent("Your C3D Prints Custom Quote");const body=encodeURIComponent($("customer-quote").value||"");window.location.href=`mailto:${selectedRequest.email}?subject=${subject}&body=${body}`}
+function openEmailClient(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}const subject=encodeURIComponent("Your C3D Prints Custom Quote");const body=encodeURIComponent(latestQuoteText||$("customer-quote").textContent||"");window.location.href=`mailto:${selectedRequest.email}?subject=${subject}&body=${body}`}
 function escapeHtml(value){return String(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
 </script>
 </body>

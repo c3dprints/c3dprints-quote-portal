@@ -117,7 +117,10 @@ def init_db():
                     final_price NUMERIC,
                     deposit_paid BOOLEAN NOT NULL DEFAULT FALSE,
                     due_date TEXT,
-                    print_notes TEXT
+                    print_notes TEXT,
+                    quoted_price NUMERIC,
+                    quote_message TEXT,
+                    quote_sent_at TIMESTAMPTZ
                 );
                 """
             )
@@ -137,6 +140,9 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS deposit_paid BOOLEAN NOT NULL DEFAULT FALSE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS due_date TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS print_notes TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
 
 
 
@@ -146,18 +152,51 @@ def save_request(data: dict, ai_summary: str) -> int:
             cur.execute(
                 """
                 INSERT INTO quote_requests (
-                    created_at, name, email, phone, project_description, quantity,
-                    approx_size, deadline, material_preference, color_preference,
-                    use_case, requirements, delivery_method, shipping_location,
-                    additional_notes, uploaded_files, ai_summary, status
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
+                    status
                 )
                 VALUES (
-                    %(created_at)s, %(name)s, %(email)s, %(phone)s,
-                    %(project_description)s, %(quantity)s, %(approx_size)s,
-                    %(deadline)s, %(material_preference)s, %(color_preference)s,
-                    %(use_case)s, %(requirements)s, %(delivery_method)s,
-                    %(shipping_location)s, %(additional_notes)s, %(uploaded_files)s,
-                    %(ai_summary)s, %(status)s
+                    %(created_at)s,
+                    %(name)s,
+                    %(email)s,
+                    %(phone)s,
+                    %(project_description)s,
+                    %(quantity)s,
+                    %(approx_size)s,
+                    %(deadline)s,
+                    %(material_preference)s,
+                    %(color_preference)s,
+                    %(use_case)s,
+                    %(requirements)s,
+                    %(delivery_method)s,
+                    %(shipping_location)s,
+                    %(additional_notes)s,
+                    %(uploaded_files)s,
+                    %(ai_summary)s,
+                    %(status)s
                 )
                 RETURNING id;
                 """,
@@ -182,7 +221,9 @@ def save_request(data: dict, ai_summary: str) -> int:
                     "status": "New",
                 },
             )
-            return cur.fetchone()["id"]
+
+            row = cur.fetchone()
+            return row["id"]
 
 
 @app.on_event("startup")
@@ -340,7 +381,7 @@ class PricingRequest(BaseModel):
     grams: float
     hours: float
     quantity: int = 1
-    fail_rate: float = 30
+    fail_rate: float = 0
     labor_minutes: float = 0
     cad_fee: float = 0
     rush_fee: float = 0
@@ -397,6 +438,9 @@ def list_requests(admin=Depends(verify_admin)):
                     deposit_paid,
                     due_date,
                     print_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -463,6 +507,9 @@ def update_request_status(
                     deposit_paid,
                     due_date,
                     print_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -530,6 +577,9 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
+                        quoted_price,
+                        quote_message,
+                        quote_sent_at,
                         status;
                     """,
                     {
@@ -573,6 +623,9 @@ def update_job_details(
                         deposit_paid,
                         due_date,
                         print_notes,
+                        quoted_price,
+                        quote_message,
+                        quote_sent_at,
                         status;
                     """,
                     {
@@ -587,55 +640,4 @@ def update_job_details(
             updated = cur.fetchone()
 
     return {"success": True, "request": updated}
-
-class SendQuoteRequest(BaseModel):
-    subject: str = "Your C3D Prints Custom Quote"
-    message: str
-
-
-@app.post("/admin/requests/{request_id}/send-quote")
-def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Depends(verify_admin)):
-    message = request.message.strip()
-    subject = request.subject.strip() or "Your C3D Prints Custom Quote"
-    if not message:
-        raise HTTPException(status_code=400, detail="Quote message cannot be empty")
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT id, name, email FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
-            quote_request = cur.fetchone()
-            if not quote_request:
-                raise HTTPException(status_code=404, detail="Quote request not found")
-
-            customer_email = quote_request["email"]
-            customer_name = quote_request["name"]
-            html_body = f"""
-            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
-              <pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre>
-            </div>
-            """
-            email_result = send_quote_notification(
-                to_email=customer_email,
-                subject=subject,
-                html_body=html_body,
-                text_body=message,
-            )
-            if not email_result.get("sent"):
-                raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
-
-            cur.execute(
-                """
-                UPDATE quote_requests
-                SET status = 'Quoted'
-                WHERE id = %(request_id)s
-                RETURNING id, created_at, name, email, phone, project_description, quantity,
-                    approx_size, deadline, material_preference, color_preference, use_case,
-                    requirements, delivery_method, shipping_location, additional_notes,
-                    uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes, status;
-                """,
-                {"request_id": request_id},
-            )
-            updated = cur.fetchone()
-
-    return {"success": True, "message": f"Quote sent to {customer_name} <{customer_email}>", "email": email_result, "request": updated}
 
