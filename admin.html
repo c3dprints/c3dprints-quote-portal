@@ -35,7 +35,7 @@ header h1{margin:0;color:var(--blue-l);font-size:20px}header p{margin:4px 0 0;co
 .kanban-column h3{margin:0 0 10px;color:var(--blue-l);font-size:14px;display:flex;justify-content:space-between;align-items:center}
 .kanban-count{color:var(--muted);font-size:12px;border:1px solid var(--border);border-radius:999px;padding:2px 7px}
 .kanban-card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:11px;margin-bottom:10px;cursor:pointer}
-.kanban-card:hover{border-color:var(--orange)}.kanban-card .k-name{font-weight:bold;color:var(--text);font-size:13px}.kanban-card .k-id{color:var(--orange-l);font-size:12px;margin-bottom:4px}.kanban-card .k-project{color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.kanban-card .k-price{color:var(--green);font-size:12px;margin-top:6px;font-weight:bold}
+.kanban-card:hover{border-color:var(--orange)}.kanban-card.dragging{opacity:.55;border-color:var(--orange)}.kanban-column.drop-target{border-color:var(--green);box-shadow:0 0 0 2px rgba(0,232,144,.18)}.kanban-card .k-name{font-weight:bold;color:var(--text);font-size:13px}.kanban-card .k-id{color:var(--orange-l);font-size:12px;margin-bottom:4px}.kanban-card .k-project{color:var(--muted);font-size:12px;line-height:1.35;margin-top:6px}.kanban-card .k-price{color:var(--green);font-size:12px;margin-top:6px;font-weight:bold}
 .request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}
 .request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}
 .req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}
@@ -70,12 +70,13 @@ header h1{margin:0;color:var(--blue-l);font-size:20px}header p{margin:4px 0 0;co
   <div class="metric-card"><div class="metric-value" id="m-average">$--</div><div class="metric-label">Average Quote</div></div>
 </div>
 <div class="view-toggle"><button id="list-view-btn" class="secondary-btn" onclick="setViewMode('list')">List View</button><button id="kanban-view-btn" class="ghost-btn" onclick="setViewMode('kanban')">Kanban View</button></div>
+<div id="kanban-help" style="color:var(--muted);font-size:13px;margin:-6px 0 12px;">Drag cards between columns to update status.</div>
 <div id="kanban-board" class="kanban-board hidden">
-  <div class="kanban-column"><h3>New <span id="kc-new" class="kanban-count">0</span></h3><div id="kanban-New"></div></div>
-  <div class="kanban-column"><h3>Quoted <span id="kc-quoted" class="kanban-count">0</span></h3><div id="kanban-Quoted"></div></div>
-  <div class="kanban-column"><h3>Approved <span id="kc-approved" class="kanban-count">0</span></h3><div id="kanban-Approved"></div></div>
-  <div class="kanban-column"><h3>Printing <span id="kc-printing" class="kanban-count">0</span></h3><div id="kanban-Printing"></div></div>
-  <div class="kanban-column"><h3>Completed <span id="kc-completed" class="kanban-count">0</span></h3><div id="kanban-Completed"></div></div>
+  <div class="kanban-column" data-status="New"><h3>New <span id="kc-new" class="kanban-count">0</span></h3><div id="kanban-New"></div></div>
+  <div class="kanban-column" data-status="Quoted"><h3>Quoted <span id="kc-quoted" class="kanban-count">0</span></h3><div id="kanban-Quoted"></div></div>
+  <div class="kanban-column" data-status="Approved"><h3>Approved <span id="kc-approved" class="kanban-count">0</span></h3><div id="kanban-Approved"></div></div>
+  <div class="kanban-column" data-status="Printing"><h3>Printing <span id="kc-printing" class="kanban-count">0</span></h3><div id="kanban-Printing"></div></div>
+  <div class="kanban-column" data-status="Completed"><h3>Completed <span id="kc-completed" class="kanban-count">0</span></h3><div id="kanban-Completed"></div></div>
 </div>
 <div id="no-selection" class="card"><div class="empty">Select a quote request.</div></div>
 <div id="selected-view" class="hidden">
@@ -109,7 +110,86 @@ async function apiFetch(url,options={}){const headers=options.headers||{};header
 async function loadAnalytics(){try{const response=await apiFetch(ANALYTICS_URL);if(!response.ok)return;const data=await response.json();$("m-new").textContent=data.new_count??0;$("m-quoted").textContent=data.quoted_count??0;$("m-approved").textContent=data.approved_count??0;$("m-printing").textContent=data.printing_count??0;$("m-completed").textContent=data.completed_count??0;$("m-open-value").textContent=money(data.quoted_open_value??0);$("m-active-value").textContent=money(data.active_job_value??0);$("m-average").textContent=money(data.average_quote??0)}catch(e){}}
 async function loadRequests(){$("request-list").innerHTML='<div class="empty">Loading requests...</div>';try{const response=await apiFetch(REQUESTS_URL);if(response.status===401){clearToken();location.reload();return}if(!response.ok)throw new Error("Could not load requests.");requests=await response.json();renderRequests();renderKanban();setViewMode(viewMode)}catch(error){$("request-list").innerHTML='<div class="empty">Error loading requests. Check login/backend/CORS.</div>'}}
 function setViewMode(mode){viewMode=mode;localStorage.setItem("c3d_view_mode",mode);const kanban=$("kanban-board"),sidebar=document.querySelector(".sidebar"),listBtn=$("list-view-btn"),kanbanBtn=$("kanban-view-btn");const layout=document.querySelector(".layout");if(mode==="kanban"){kanban.classList.remove("hidden");sidebar.style.display="none";layout.classList.add("kanban-mode");listBtn.className="ghost-btn";kanbanBtn.className="secondary-btn"}else{kanban.classList.add("hidden");sidebar.style.display="block";layout.classList.remove("kanban-mode");listBtn.className="secondary-btn";kanbanBtn.className="ghost-btn"}renderKanban()}
-function renderKanban(){if(!$("kanban-board"))return;const statuses=["New","Quoted","Approved","Printing","Completed"];const counts={New:0,Quoted:0,Approved:0,Printing:0,Completed:0};statuses.forEach(s=>{$("kanban-"+s).innerHTML=""});requests.forEach(req=>{const status=req.status||"New";if(!statuses.includes(status))return;counts[status]++;const project=escapeHtml(req.project_description||"").slice(0,90);const price=req.final_price||req.quoted_price;const card=document.createElement("div");card.className="kanban-card";card.onclick=()=>selectRequest(req.id);card.innerHTML=`<div class="k-id">#${escapeHtml(req.id)}</div><div class="k-name">${escapeHtml(req.name||"Unknown")}</div><div class="k-project">${project}${project.length>=90?"...":""}</div>${price?`<div class="k-price">${money(price)}</div>`:""}`;$("kanban-"+status).appendChild(card)});$("kc-new").textContent=counts.New;$("kc-quoted").textContent=counts.Quoted;$("kc-approved").textContent=counts.Approved;$("kc-printing").textContent=counts.Printing;$("kc-completed").textContent=counts.Completed}
+
+let draggedRequestId=null;
+
+function setupKanbanDropZones(){
+  document.querySelectorAll(".kanban-column").forEach(column=>{
+    if(column.dataset.dropReady==="true") return;
+    column.dataset.dropReady="true";
+
+    column.addEventListener("dragover",event=>{
+      event.preventDefault();
+      column.classList.add("drop-target");
+    });
+
+    column.addEventListener("dragleave",()=>{
+      column.classList.remove("drop-target");
+    });
+
+    column.addEventListener("drop",async event=>{
+      event.preventDefault();
+      column.classList.remove("drop-target");
+
+      const newStatus=column.dataset.status;
+      const requestId=Number(draggedRequestId);
+
+      if(!requestId || !newStatus) return;
+
+      const req=requests.find(r=>Number(r.id)===requestId);
+      if(!req || req.status===newStatus) return;
+
+      await updateRequestStatusFromKanban(requestId,newStatus);
+    });
+  });
+}
+
+function handleKanbanDragStart(event){
+  draggedRequestId=event.currentTarget.dataset.requestId;
+  event.currentTarget.classList.add("dragging");
+  event.dataTransfer.effectAllowed="move";
+  event.dataTransfer.setData("text/plain",draggedRequestId);
+}
+
+function handleKanbanDragEnd(event){
+  event.currentTarget.classList.remove("dragging");
+  draggedRequestId=null;
+  document.querySelectorAll(".kanban-column").forEach(column=>column.classList.remove("drop-target"));
+}
+
+async function updateRequestStatusFromKanban(requestId,newStatus){
+  try{
+    const response=await apiFetch(`${API_BASE}/admin/requests/${requestId}/status`,{
+      method:"PATCH",
+      body:JSON.stringify({status:newStatus})
+    });
+
+    if(!response.ok){
+      const problem=await response.json().catch(()=>({detail:"Status update failed"}));
+      throw new Error(problem.detail||"Status update failed");
+    }
+
+    const data=await response.json();
+    const idx=requests.findIndex(r=>Number(r.id)===requestId);
+
+    if(idx>=0) requests[idx]=data.request;
+
+    if(selectedRequest && Number(selectedRequest.id)===requestId){
+      selectedRequest=data.request;
+      $("d-status").textContent=data.request.status;
+      $("status-select").value=data.request.status;
+      $("status-message").textContent=`Moved to ${newStatus}.`;
+    }
+
+    renderRequests();
+    renderKanban();
+    loadAnalytics();
+  }catch(error){
+    alert(error.message||"Could not update status.");
+  }
+}
+
+function renderKanban(){if(!$("kanban-board"))return;const statuses=["New","Quoted","Approved","Printing","Completed"];const counts={New:0,Quoted:0,Approved:0,Printing:0,Completed:0};statuses.forEach(s=>{$("kanban-"+s).innerHTML=""});requests.forEach(req=>{const status=req.status||"New";if(!statuses.includes(status))return;counts[status]++;const project=escapeHtml(req.project_description||"").slice(0,90);const price=req.final_price||req.quoted_price;const card=document.createElement("div");card.className="kanban-card";card.draggable=true;card.dataset.requestId=req.id;card.addEventListener("dragstart",handleKanbanDragStart);card.addEventListener("dragend",handleKanbanDragEnd);card.onclick=()=>selectRequest(req.id);card.innerHTML=`<div class="k-id">#${escapeHtml(req.id)}</div><div class="k-name">${escapeHtml(req.name||"Unknown")}</div><div class="k-project">${project}${project.length>=90?"...":""}</div>${price?`<div class="k-price">${money(price)}</div>`:""}`;$("kanban-"+status).appendChild(card)});$("kc-new").textContent=counts.New;$("kc-quoted").textContent=counts.Quoted;$("kc-approved").textContent=counts.Approved;$("kc-printing").textContent=counts.Printing;$("kc-completed").textContent=counts.Completed;setupKanbanDropZones()}
 function statusClass(status){return "status-"+String(status||"New").replaceAll(" ","-")}
 function renderRequests(){const query=$("search").value.toLowerCase().trim();const filtered=requests.filter(req=>[req.id,req.name,req.email,req.project_description,req.material_preference,req.status].join(" ").toLowerCase().includes(query));if(!filtered.length){$("request-list").innerHTML='<div class="empty">No requests found.</div>';return}$("request-list").innerHTML=filtered.map(req=>{const active=selectedRequest&&selectedRequest.id===req.id?"active":"";const project=escapeHtml(req.project_description||"").slice(0,115);const date=req.created_at?new Date(req.created_at).toLocaleString():"No date";return `<div class="request-card ${active}" onclick="selectRequest(${req.id})"><div class="req-top"><div><div class="req-id">#${req.id}</div><div class="req-name">${escapeHtml(req.name||"Unknown")}</div></div><div class="req-date">${escapeHtml(date)}</div></div><div class="req-project">${project}${project.length>=115?"...":""}</div><span class="status ${statusClass(req.status||"New")}">${escapeHtml(req.status||"New")}</span></div>`}).join("")}
 function selectRequest(id){selectedRequest=requests.find(r=>r.id===id);if(!selectedRequest)return;$("no-selection").classList.add("hidden");$("selected-view").classList.remove("hidden");if(viewMode==="kanban")$("selected-view").scrollIntoView({behavior:"smooth",block:"start"});$("d-name").textContent=selectedRequest.name||"--";$("d-email").textContent=selectedRequest.email||"--";$("d-phone").textContent=selectedRequest.phone||"--";$("d-status").textContent=selectedRequest.status||"New";$("status-select").value=selectedRequest.status||"New";$("d-quantity").textContent=selectedRequest.quantity||"1";$("d-material").textContent=selectedRequest.material_preference||"Not sure";$("d-color").textContent=selectedRequest.color_preference||"--";$("d-deadline").textContent=selectedRequest.deadline||"--";$("d-use").textContent=selectedRequest.use_case||"--";$("d-delivery").textContent=selectedRequest.delivery_method||"--";$("d-final-price").textContent=selectedRequest.final_price?money(selectedRequest.final_price):"--";$("d-deposit-paid").textContent=selectedRequest.deposit_paid?"Yes":"No";$("d-due-date").textContent=selectedRequest.due_date||"--";$("d-quoted-price").textContent=selectedRequest.quoted_price?money(selectedRequest.quoted_price):"--";$("d-quote-sent-at").textContent=formatDateTime(selectedRequest.quote_sent_at);$("d-project").textContent=selectedRequest.project_description||"--";$("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";$("quantity").value=selectedRequest.quantity||1;$("job-final-price").value=selectedRequest.final_price||"";$("job-deposit-paid").value=selectedRequest.deposit_paid?"true":"false";$("job-due-date").value=selectedRequest.due_date||"";$("job-print-notes").value=selectedRequest.print_notes||"";$("qh-price").textContent=selectedRequest.quoted_price?money(selectedRequest.quoted_price):"--";$("qh-sent-at").textContent=formatDateTime(selectedRequest.quote_sent_at);$("qh-message").textContent=selectedRequest.quote_message||"No quote sent yet.";$("status-message").textContent="";$("status-error").textContent="";$("job-message").textContent="";$("job-error").textContent="";$("send-message").textContent="";$("send-error").textContent="";$("calc-results").classList.add("hidden");$("customer-quote").value="Calculate a quote to generate reply text.";latestQuoteText="";renderRequests()}
