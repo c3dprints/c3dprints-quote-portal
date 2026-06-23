@@ -340,7 +340,7 @@ class PricingRequest(BaseModel):
     grams: float
     hours: float
     quantity: int = 1
-    fail_rate: float = 0
+    fail_rate: float = 30
     labor_minutes: float = 0
     cad_fee: float = 0
     rush_fee: float = 0
