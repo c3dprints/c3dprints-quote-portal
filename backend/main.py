@@ -285,8 +285,9 @@ def build_ai_quote_assist_prompt(row: dict) -> str:
 
     return f"""
 You are helping C3D Prints, a small 3D printing business, review a customer quote request.
-You are not allowed to invent exact print time, filament weight, or final price unless the request provides enough information.
-Give a practical quote-assist summary for the owner.
+
+Do not invent exact print time, filament weight, or final price unless the customer gave enough detail.
+Give a practical quote-assist summary for the shop owner.
 
 Customer:
 - Name: {row.get("name")}
@@ -338,7 +339,7 @@ Internal Notes:
 def generate_ai_quote_assist(row: dict) -> str:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
-        return "AI Quote Assist unavailable: OPENAI_API_KEY is not configured."
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured in Render")
 
     client = OpenAI(api_key=api_key)
     prompt = build_ai_quote_assist_prompt(row)
@@ -356,6 +357,7 @@ def generate_ai_quote_assist(row: dict) -> str:
     )
 
     return response.choices[0].message.content.strip()
+
 
 
 @app.on_event("startup")
@@ -376,7 +378,6 @@ def root():
             "/admin/login",
             "/admin/requests",
             "/admin/requests/{request_id}/status",
-            "/admin/requests/{request_id}/ai-quote-assist",
         ],
     }
 
@@ -896,3 +897,56 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
+
+
+@app.post("/admin/requests/{request_id}/ai-quote-assist")
+def create_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, final_price,
+                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
+                    quoted_price, quote_message, quote_sent_at, ai_quote_assist,
+                    ai_quote_assist_at, status
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            assist = generate_ai_quote_assist(row)
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET ai_quote_assist = %(ai_quote_assist)s,
+                    ai_quote_assist_at = %(ai_quote_assist_at)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, final_price,
+                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
+                    quoted_price, quote_message, quote_sent_at, ai_quote_assist,
+                    ai_quote_assist_at, status;
+                """,
+                {
+                    "request_id": request_id,
+                    "ai_quote_assist": assist,
+                    "ai_quote_assist_at": datetime.now(timezone.utc),
+                },
+            )
+            updated = cur.fetchone()
+
+    return {"success": True, "request": updated, "ai_quote_assist": assist}
+
