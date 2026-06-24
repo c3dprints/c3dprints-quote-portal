@@ -74,15 +74,23 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
 </div>
 <div class="card"><h2>Project Description</h2><div id="d-project" class="ai-box"></div></div>
   <div class="card"><h2>AI Triage Summary</h2><div id="d-ai" class="ai-box"></div></div>
-  <div class="card"><h2>AI Quote Assistant</h2>
-  <div id="ai-quote-assist-box" class="quote-box">No AI quote assist generated yet.</div>
-  <div class="action-row">
-    <button class="secondary-btn" onclick="generateAiQuoteAssist()">Generate AI Quote Assist</button>
-    <button class="ghost-btn" onclick="copyAiQuoteAssist()">Copy AI Assist</button>
-    <button class="ghost-btn" onclick="useAiCustomerReply()">Use Suggested Reply</button>
+  <div class="card"><h2>AI Structured Quote Data</h2>
+  <div class="detail-grid">
+    <div class="detail-item"><label>Material</label><strong id="ai-s-material">--</strong></div>
+    <div class="detail-item"><label>Complexity</label><strong id="ai-s-complexity">--</strong></div>
+    <div class="detail-item"><label>Confidence</label><strong id="ai-s-confidence">--</strong></div>
+    <div class="detail-item"><label>Estimated Grams</label><strong id="ai-s-grams">--</strong></div>
+    <div class="detail-item"><label>Estimated Hours</label><strong id="ai-s-hours">--</strong></div>
+    <div class="detail-item"><label>Fail Rate</label><strong id="ai-s-fail">--</strong></div>
+    <div class="detail-item"><label>Price Min</label><strong id="ai-s-price-min">--</strong></div>
+    <div class="detail-item"><label>Price Max</label><strong id="ai-s-price-max">--</strong></div>
+    <div class="detail-item"><label>Multiplier</label><strong id="ai-s-multiplier">--</strong></div>
   </div>
-  <div id="ai-assist-message" class="success-msg"></div>
-  <div id="ai-assist-error" class="error"></div>
+  <div style="margin-top:12px;">
+    <label style="display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px;">Risk Flags / Questions</label>
+    <div id="ai-s-risks" class="quote-box">--</div>
+  </div>
+  <div class="action-row"><button class="send-btn" onclick="applyAiStructuredToCalculator()">Auto-fill Calculator</button></div>
 </div>
   <div class="card"><h2>Calculate Quote</h2><div class="calc-grid">
     <div class="field"><label>Filament Used (grams)</label><input id="grams" type="number" step="0.1" placeholder="100"></div>
@@ -198,7 +206,7 @@ function selectRequest(id){
   $("d-use").textContent=selectedRequest.use_case||"--";
   $("d-delivery").textContent=selectedRequest.delivery_method||"--";$("d-final-price").textContent=selectedRequest.final_price?money(selectedRequest.final_price):"--";$("d-deposit-paid").textContent=selectedRequest.deposit_paid?"Yes":"No";$("d-due-date").textContent=selectedRequest.due_date||"--";
   $("d-project").textContent=selectedRequest.project_description||"--";
-  $("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";$("ai-quote-assist-box").textContent=selectedRequest.ai_quote_assist||"No AI quote assist generated yet.";$("ai-assist-message").textContent="";$("ai-assist-error").textContent="";
+  $("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";
   $("quantity").value=selectedRequest.quantity||1;$("job-final-price").value=selectedRequest.final_price||"";$("job-deposit-paid").value=selectedRequest.deposit_paid?"true":"false";$("job-due-date").value=selectedRequest.due_date||"";$("job-print-notes").value=selectedRequest.print_notes||"";
   $("calc-results").classList.add("hidden");
   $("customer-quote").textContent="Calculate a quote to generate reply text.";
@@ -207,79 +215,40 @@ function selectRequest(id){
 }
 
 
-async function generateAiQuoteAssist(){
-  if(!selectedRequest){
-    alert("Select a request first.");
-    return;
+function getAiStructured(){
+  if(!selectedRequest || !selectedRequest.ai_quote_structured) return {};
+  if(typeof selectedRequest.ai_quote_structured==="string"){
+    try{return JSON.parse(selectedRequest.ai_quote_structured)||{};}catch(e){return {};}
   }
-
-  $("ai-assist-message").textContent="";
-  $("ai-assist-error").textContent="";
-  $("ai-quote-assist-box").textContent="Generating AI quote assist...";
-
-  try{
-    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/ai-quote-assist`,{
-      method:"POST"
-    });
-
-    if(!response.ok){
-      const problem=await response.json().catch(()=>({detail:"AI quote assist failed"}));
-      throw new Error(problem.detail||"AI quote assist failed");
-    }
-
-    const data=await response.json();
-    const idx=requests.findIndex(r=>Number(r.id)===Number(selectedRequest.id));
-
-    if(idx>=0){
-      requests[idx]=data.request;
-    }
-
-    selectedRequest=data.request;
-    $("ai-quote-assist-box").textContent=data.ai_quote_assist||data.request.ai_quote_assist||"No AI quote assist returned.";
-    $("ai-assist-message").textContent="AI quote assist generated.";
-
-    renderRequests();
-    if(typeof renderKanban==="function") renderKanban();
-  }catch(error){
-    $("ai-assist-error").textContent=error.message||"AI quote assist failed";
-    $("ai-quote-assist-box").textContent=selectedRequest.ai_quote_assist||"No AI quote assist generated yet.";
-  }
+  return selectedRequest.ai_quote_structured || {};
 }
 
-async function copyAiQuoteAssist(){
-  const text=$("ai-quote-assist-box").textContent.trim();
-
-  if(!text || text==="No AI quote assist generated yet."){
-    alert("No AI quote assist to copy yet.");
-    return;
-  }
-
-  await navigator.clipboard.writeText(text);
-  alert("AI quote assist copied.");
+function renderAiStructured(){
+  const data=getAiStructured();
+  const set=(id,value)=>{if($(id)) $(id).textContent=(value===null||value===undefined||value==="")?"--":String(value);};
+  set("ai-s-material",data.recommended_material);
+  set("ai-s-complexity",data.complexity);
+  set("ai-s-confidence",data.confidence);
+  set("ai-s-grams",data.estimated_grams);
+  set("ai-s-hours",data.estimated_hours);
+  set("ai-s-fail",data.fail_rate);
+  set("ai-s-price-min",data.price_min!==null&&data.price_min!==undefined?money(data.price_min):null);
+  set("ai-s-price-max",data.price_max!==null&&data.price_max!==undefined?money(data.price_max):null);
+  set("ai-s-multiplier",data.complexity_multiplier);
+  const risks=[...(data.risk_flags||[]),...(data.questions_for_customer||[])];
+  if($("ai-s-risks")) $("ai-s-risks").textContent=risks.length?risks.map(item=>"- "+item).join("\n"):"--";
 }
 
-function useAiCustomerReply(){
-  const text=$("ai-quote-assist-box").textContent || "";
-  const marker="Suggested Customer Reply:";
-  const idx=text.indexOf(marker);
-
-  if(idx===-1){
-    alert("No Suggested Customer Reply section found.");
-    return;
-  }
-
-  const after=text.slice(idx + marker.length).trim();
-  const internalIdx=after.indexOf("Internal Notes:");
-  const reply=(internalIdx>=0 ? after.slice(0, internalIdx) : after).trim();
-
-  if(!reply){
-    alert("Suggested reply was empty.");
-    return;
-  }
-
-  $("customer-quote").value=reply;
-  latestQuoteText=reply;
-  alert("Suggested reply copied into Customer Reply Draft.");
+function applyAiStructuredToCalculator(){
+  const data=getAiStructured();
+  let applied=[];
+  if(data.estimated_grams!==null&&data.estimated_grams!==undefined&&Number(data.estimated_grams)>0){$("grams").value=Number(data.estimated_grams);applied.push("grams");}
+  if(data.estimated_hours!==null&&data.estimated_hours!==undefined&&Number(data.estimated_hours)>0){$("hours").value=Number(data.estimated_hours);applied.push("hours");}
+  if(data.fail_rate!==null&&data.fail_rate!==undefined&&Number(data.fail_rate)>=0){$("fail_rate").value=Number(data.fail_rate);applied.push("fail rate");}
+  if(data.complexity_multiplier!==null&&data.complexity_multiplier!==undefined&&Number(data.complexity_multiplier)>0){$("complexity_multiplier").value=String(data.complexity_multiplier);applied.push("complexity");}
+  if(data.customer_reply){$("customer-quote").value=data.customer_reply;latestQuoteText=data.customer_reply;applied.push("customer reply");}
+  if(!applied.length){alert("AI did not provide calculator-ready values.");return;}
+  alert("Applied AI values: "+applied.join(", "));
 }
 
 
