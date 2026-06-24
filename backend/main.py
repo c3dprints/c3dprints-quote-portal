@@ -164,10 +164,6 @@ def save_request(data: dict, ai_summary: str) -> int:
                     additional_notes,
                     uploaded_files,
                     ai_summary,
-                    final_price,
-                    deposit_paid,
-                    due_date,
-                    print_notes,
                     status
                 )
                 VALUES (
@@ -213,9 +209,23 @@ def save_request(data: dict, ai_summary: str) -> int:
                     "status": "New",
                 },
             )
-
             row = cur.fetchone()
             return row["id"]
+
+
+def update_request_files(request_id: int, uploaded_files: list) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET uploaded_files = %(uploaded_files)s
+                WHERE id = %(request_id)s;
+                """,
+                {"uploaded_files": Json(uploaded_files), "request_id": request_id},
+            )
+
+
 
 
 @app.on_event("startup")
