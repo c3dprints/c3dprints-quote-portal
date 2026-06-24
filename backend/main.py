@@ -14,6 +14,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from openai import OpenAI
 
 from ai_triage import ai_triage_summary
 from auth import check_admin_credentials, create_admin_token, verify_admin
@@ -23,6 +24,7 @@ from pricing_engine import PricingSettings, calculate_quote
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
+AI_QUOTE_MODEL = os.getenv("AI_QUOTE_MODEL", "gpt-4o-mini")
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -183,7 +185,9 @@ def init_db():
                     profit_notes TEXT,
                     quoted_price NUMERIC,
                     quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ
+                    quote_sent_at TIMESTAMPTZ,
+                    ai_quote_assist TEXT,
+                    ai_quote_assist_at TIMESTAMPTZ
                 );
                 """
             )
@@ -208,6 +212,8 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist_at TIMESTAMPTZ;")
 
 
 
@@ -267,6 +273,91 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
 
 
 
+
+def build_ai_quote_assist_prompt(row: dict) -> str:
+    uploaded_files = row.get("uploaded_files") or []
+    file_names = []
+    for file in uploaded_files:
+        if isinstance(file, dict):
+            file_names.append(file.get("original_filename") or file.get("filename") or "uploaded file")
+        else:
+            file_names.append(str(file))
+
+    return f"""
+You are helping C3D Prints, a small 3D printing business, review a customer quote request.
+You are not allowed to invent exact print time, filament weight, or final price unless the request provides enough information.
+Give a practical quote-assist summary for the owner.
+
+Customer:
+- Name: {row.get("name")}
+- Email: {row.get("email")}
+
+Request:
+- Description: {row.get("project_description")}
+- Quantity: {row.get("quantity")}
+- Approx size: {row.get("approx_size")}
+- Deadline: {row.get("deadline")}
+- Material preference: {row.get("material_preference")}
+- Color preference: {row.get("color_preference")}
+- Use case: {row.get("use_case")}
+- Requirements: {row.get("requirements")}
+- Delivery method: {row.get("delivery_method")}
+- Shipping location: {row.get("shipping_location")}
+- Additional notes: {row.get("additional_notes")}
+- Uploaded files: {", ".join(file_names) if file_names else "None"}
+
+Return this exact structure:
+
+AI QUOTE ASSIST
+
+Recommended Material:
+- ...
+
+Complexity:
+- Low / Medium / High
+- Why:
+
+Risks / Questions:
+- ...
+
+Suggested Pricing Inputs:
+- Estimated grams: unknown unless file/details support estimate
+- Estimated print hours: unknown unless file/details support estimate
+- Complexity multiplier suggestion:
+- Fail rate suggestion:
+
+Suggested Customer Reply:
+Hi [first name],
+...
+
+Internal Notes:
+- ...
+""".strip()
+
+
+def generate_ai_quote_assist(row: dict) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        return "AI Quote Assist unavailable: OPENAI_API_KEY is not configured."
+
+    client = OpenAI(api_key=api_key)
+    prompt = build_ai_quote_assist_prompt(row)
+
+    response = client.chat.completions.create(
+        model=AI_QUOTE_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a practical 3D print shop quoting assistant. Be concise, careful, and do not invent exact measurements or prices without enough evidence.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
+    )
+
+    return response.choices[0].message.content.strip()
+
+
 @app.on_event("startup")
 def on_startup():
     init_db()
@@ -285,6 +376,7 @@ def root():
             "/admin/login",
             "/admin/requests",
             "/admin/requests/{request_id}/status",
+            "/admin/requests/{request_id}/ai-quote-assist",
         ],
     }
 
@@ -501,6 +593,8 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -572,6 +666,8 @@ def update_request_status(
                     quoted_price,
                     quote_message,
                     quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -648,6 +744,8 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
                         status;
                     """,
                     {
@@ -700,6 +798,8 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
                         status;
                     """,
                     {
@@ -792,7 +892,7 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
-                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, status;
+                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, ai_quote_assist, ai_quote_assist_at, status;
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
