@@ -1,23 +1,44 @@
 import json
 import os
-import sqlite3
-from datetime import datetime
-from pathlib import Path
+import re
+from datetime import datetime, timezone
 from typing import List, Optional
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+
+import psycopg
+import requests
+from psycopg.rows import dict_row
+from psycopg.types.json import Json
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Form, File, UploadFile, HTTPException
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from openai import OpenAI
 
 from ai_triage import ai_triage_summary
+from auth import check_admin_credentials, create_admin_token, verify_admin
 from email_service import send_quote_notification
-from pricing_engine import calculate_quote, PricingSettings
+from pricing_engine import PricingSettings, calculate_quote
 
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
-DB_PATH = Path(__file__).parent / "quote_requests.db"
+AI_QUOTE_MODEL = os.getenv("AI_QUOTE_MODEL", "gpt-4o-mini")
+DATABASE_URL = os.getenv("DATABASE_URL")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
+
+VALID_STATUSES = {
+    "New",
+    "Need Info",
+    "Quoted",
+    "Approved",
+    "Printing",
+    "Completed",
+    "Archived",
+}
 
 app = FastAPI(title=APP_NAME)
 
@@ -36,82 +57,444 @@ app.add_middleware(
 )
 
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS quote_requests (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            created_at TEXT NOT NULL,
-            name TEXT NOT NULL,
-            email TEXT NOT NULL,
-            phone TEXT,
-            project_description TEXT NOT NULL,
-            quantity INTEGER NOT NULL,
-            approx_size TEXT,
-            deadline TEXT,
-            material_preference TEXT,
-            color_preference TEXT,
-            use_case TEXT,
-            requirements TEXT,
-            delivery_method TEXT,
-            shipping_location TEXT,
-            additional_notes TEXT,
-            ai_summary TEXT,
-            status TEXT DEFAULT 'New'
-        )
-        """
+def normalized_database_url() -> str:
+    if not DATABASE_URL:
+        raise RuntimeError("DATABASE_URL is not configured")
+
+    parsed = urlparse(DATABASE_URL)
+    query = dict(parse_qsl(parsed.query))
+
+    if "sslmode" not in query:
+        query["sslmode"] = "require"
+
+    return urlunparse(parsed._replace(query=urlencode(query)))
+
+
+def get_conn():
+    return psycopg.connect(
+        normalized_database_url(),
+        row_factory=dict_row,
+        prepare_threshold=None,
     )
-    conn.commit()
-    conn.close()
 
 
-init_db()
+
+def safe_storage_filename(filename: str) -> str:
+    name = os.path.basename(filename or "uploaded-file")
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
+    return name or "uploaded-file"
+
+
+def storage_enabled() -> bool:
+    return bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY and SUPABASE_STORAGE_BUCKET)
+
+
+def upload_file_to_supabase_storage(request_id: int, file: UploadFile) -> Optional[dict]:
+    if not storage_enabled():
+        return None
+    filename = safe_storage_filename(file.filename)
+    storage_path = f"quote-requests/{request_id}/{filename}"
+    upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
+    contents = file.file.read()
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "x-upsert": "true",
+        "Content-Type": file.content_type or "application/octet-stream",
+    }
+    response = requests.post(upload_url, headers=headers, data=contents, timeout=60)
+    if response.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=f"File upload failed for {filename}: {response.text}")
+    return {
+        "filename": filename,
+        "original_filename": file.filename,
+        "storage_path": storage_path,
+        "bucket": SUPABASE_STORAGE_BUCKET,
+        "content_type": file.content_type,
+        "size_bytes": len(contents),
+    }
+
+
+def create_signed_file_url(storage_path: str, expires_in: int = 3600) -> str:
+    if not storage_enabled():
+        raise HTTPException(status_code=500, detail="Supabase Storage is not configured")
+    sign_url = f"{SUPABASE_URL}/storage/v1/object/sign/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
+    headers = {
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Content-Type": "application/json",
+    }
+    response = requests.post(sign_url, headers=headers, json={"expiresIn": expires_in}, timeout=30)
+    if response.status_code not in (200, 201):
+        raise HTTPException(status_code=500, detail=f"Could not create signed file URL: {response.text}")
+    data = response.json()
+    signed_url = data.get("signedURL") or data.get("signedUrl") or data.get("signed_url")
+    if not signed_url:
+        raise HTTPException(status_code=500, detail="Supabase did not return a signed URL")
+    return signed_url if signed_url.startswith("http") else f"{SUPABASE_URL}/storage/v1{signed_url}"
+
+
+def get_pricing_settings() -> PricingSettings:
+    return PricingSettings(
+        kwh=float(os.getenv("DEFAULT_KWH", 0.33)),
+        watts=float(os.getenv("DEFAULT_WATTS", 180)),
+        spool_usd=float(os.getenv("DEFAULT_SPOOL_USD", 20)),
+        spool_g=float(os.getenv("DEFAULT_SPOOL_G", 1000)),
+        nozzle_cost=float(os.getenv("DEFAULT_NOZZLE_COST", 8)),
+        nozzle_hours=float(os.getenv("DEFAULT_NOZZLE_HOURS", 400)),
+        sheet_cost=float(os.getenv("DEFAULT_SHEET_COST", 25)),
+        sheet_prints=float(os.getenv("DEFAULT_SHEET_PRINTS", 500)),
+        shipping=float(os.getenv("DEFAULT_SHIPPING", 5)),
+        boxing=float(os.getenv("DEFAULT_BOXING", 1.50)),
+        tax=float(os.getenv("DEFAULT_TAX", 6.25)),
+        markup=float(os.getenv("DEFAULT_MARKUP", 50)),
+        labor_rate=float(os.getenv("DEFAULT_LABOR_RATE", 35)),
+    )
+
+
+def init_db():
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS quote_requests (
+                    id BIGSERIAL PRIMARY KEY,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    name TEXT NOT NULL,
+                    email TEXT NOT NULL,
+                    phone TEXT,
+                    project_description TEXT NOT NULL,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    approx_size TEXT,
+                    deadline TEXT,
+                    material_preference TEXT,
+                    color_preference TEXT,
+                    use_case TEXT,
+                    requirements JSONB DEFAULT '[]'::jsonb,
+                    delivery_method TEXT,
+                    shipping_location TEXT,
+                    additional_notes TEXT,
+                    uploaded_files JSONB DEFAULT '[]'::jsonb,
+                    ai_summary TEXT,
+                    status TEXT NOT NULL DEFAULT 'New',
+                    final_price NUMERIC,
+                    deposit_paid BOOLEAN NOT NULL DEFAULT FALSE,
+                    due_date TEXT,
+                    print_notes TEXT,
+                    actual_cost NUMERIC,
+                    profit_notes TEXT,
+                    quoted_price NUMERIC,
+                    quote_message TEXT,
+                    quote_sent_at TIMESTAMPTZ,
+                    ai_quote_assist TEXT,
+                    ai_quote_assist_at TIMESTAMPTZ,
+                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_quote_requests_created_at
+                ON quote_requests (created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_quote_requests_status
+                ON quote_requests (status);
+                """
+            )
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS final_price NUMERIC;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS deposit_paid BOOLEAN NOT NULL DEFAULT FALSE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS due_date TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS print_notes TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS actual_cost NUMERIC;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS profit_notes TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
+
 
 
 def save_request(data: dict, ai_summary: str) -> int:
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute(
-        """
-        INSERT INTO quote_requests (
-            created_at, name, email, phone, project_description, quantity,
-            approx_size, deadline, material_preference, color_preference,
-            use_case, requirements, delivery_method, shipping_location,
-            additional_notes, ai_summary, status
-        )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """,
-        (
-            datetime.utcnow().isoformat(),
-            data["name"],
-            data["email"],
-            data.get("phone"),
-            data["project_description"],
-            data["quantity"],
-            data.get("approx_size"),
-            data.get("deadline"),
-            data.get("material_preference"),
-            data.get("color_preference"),
-            data.get("use_case"),
-            json.dumps(data.get("requirements", [])),
-            data.get("delivery_method"),
-            data.get("shipping_location"),
-            data.get("additional_notes"),
-            ai_summary,
-            "New",
-        ),
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO quote_requests (
+                    created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, status
+                )
+                VALUES (
+                    %(created_at)s, %(name)s, %(email)s, %(phone)s,
+                    %(project_description)s, %(quantity)s, %(approx_size)s,
+                    %(deadline)s, %(material_preference)s, %(color_preference)s,
+                    %(use_case)s, %(requirements)s, %(delivery_method)s,
+                    %(shipping_location)s, %(additional_notes)s, %(uploaded_files)s,
+                    %(ai_summary)s, %(status)s
+                )
+                RETURNING id;
+                """,
+                {
+                    "created_at": datetime.now(timezone.utc),
+                    "name": data["name"],
+                    "email": data["email"],
+                    "phone": data.get("phone"),
+                    "project_description": data["project_description"],
+                    "quantity": data["quantity"],
+                    "approx_size": data.get("approx_size"),
+                    "deadline": data.get("deadline"),
+                    "material_preference": data.get("material_preference"),
+                    "color_preference": data.get("color_preference"),
+                    "use_case": data.get("use_case"),
+                    "requirements": Json(data.get("requirements", [])),
+                    "delivery_method": data.get("delivery_method"),
+                    "shipping_location": data.get("shipping_location"),
+                    "additional_notes": data.get("additional_notes"),
+                    "uploaded_files": Json(data.get("uploaded_files", [])),
+                    "ai_summary": ai_summary,
+                    "status": "New",
+                },
+            )
+            return cur.fetchone()["id"]
+
+
+def update_request_files(request_id: int, uploaded_files: list) -> None:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE quote_requests SET uploaded_files = %(uploaded_files)s WHERE id = %(request_id)s;",
+                {"uploaded_files": Json(uploaded_files), "request_id": request_id},
+            )
+
+
+
+
+
+def extract_ai_quote_structured(text: str) -> dict:
+    if not text:
+        return {}
+
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    raw = match.group(1) if match else ""
+
+    if not raw:
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        raw = match.group(1) if match else ""
+
+    if not raw:
+        return {}
+
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+
+    if not isinstance(parsed, dict):
+        return {}
+
+    allowed = {
+        "recommended_material",
+        "complexity",
+        "estimated_grams",
+        "estimated_hours",
+        "complexity_multiplier",
+        "fail_rate",
+        "price_min",
+        "price_max",
+        "risk_flags",
+        "questions_for_customer",
+        "customer_reply",
+        "internal_notes",
+        "confidence",
+    }
+
+    return {key: parsed.get(key) for key in allowed if key in parsed}
+
+
+def build_ai_quote_assist_prompt(row: dict) -> str:
+    uploaded_files = row.get("uploaded_files") or []
+    file_names = []
+
+    for file in uploaded_files:
+        if isinstance(file, dict):
+            file_names.append(file.get("original_filename") or file.get("filename") or "uploaded file")
+        else:
+            file_names.append(str(file))
+
+    return f"""
+You are helping C3D Prints, a small 3D printing business, review a customer quote request.
+
+Do not invent exact print time, filament weight, or final price unless the customer gave enough detail.
+Give a practical quote-assist summary for the shop owner.
+
+Customer:
+- Name: {row.get("name")}
+- Email: {row.get("email")}
+
+Request:
+- Description: {row.get("project_description")}
+- Quantity: {row.get("quantity")}
+- Approx size: {row.get("approx_size")}
+- Deadline: {row.get("deadline")}
+- Material preference: {row.get("material_preference")}
+- Color preference: {row.get("color_preference")}
+- Use case: {row.get("use_case")}
+- Requirements: {row.get("requirements")}
+- Delivery method: {row.get("delivery_method")}
+- Shipping location: {row.get("shipping_location")}
+- Additional notes: {row.get("additional_notes")}
+- Uploaded files: {", ".join(file_names) if file_names else "None"}
+
+Return a readable shop-owner summary and then return valid JSON in this exact schema inside a fenced code block labeled json.
+Use null when unknown. Do not invent exact numbers without enough evidence.
+
+AI QUOTE ASSIST
+
+Recommended Material:
+- ...
+
+Complexity:
+- Low / Medium / High
+- Why:
+
+Risks / Questions:
+- ...
+
+Suggested Pricing Inputs:
+- Estimated grams:
+- Estimated print hours:
+- Complexity multiplier suggestion:
+- Fail rate suggestion:
+
+Suggested Customer Reply:
+Hi [first name],
+...
+
+Internal Notes:
+- ...
+
+```json
+{{
+  "recommended_material": null,
+  "complexity": "Low|Medium|High|Unknown",
+  "estimated_grams": null,
+  "estimated_hours": null,
+  "complexity_multiplier": null,
+  "fail_rate": 30,
+  "price_min": null,
+  "price_max": null,
+  "risk_flags": [],
+  "questions_for_customer": [],
+  "customer_reply": null,
+  "internal_notes": null,
+  "confidence": "Low|Medium|High"
+}}
+```
+""".strip()
+
+
+def generate_ai_quote_assist(row: dict) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured in Render")
+
+    client = OpenAI(api_key=api_key)
+    prompt = build_ai_quote_assist_prompt(row)
+
+    response = client.chat.completions.create(
+        model=AI_QUOTE_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a practical 3D print shop quoting assistant. Be concise, careful, and do not invent exact measurements or prices without enough evidence.",
+            },
+            {"role": "user", "content": prompt},
+        ],
+        temperature=0.3,
     )
-    request_id = cur.lastrowid
-    conn.commit()
-    conn.close()
-    return request_id
+
+    return response.choices[0].message.content.strip()
+
+
+
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
+@app.get("/")
+def root():
+    return {
+        "ok": True,
+        "app": APP_NAME,
+        "storage": "supabase_postgres",
+        "routes": [
+            "/health",
+            "/quote-request",
+            "/calculate",
+            "/admin/login",
+            "/admin/requests",
+            "/admin/requests/{request_id}/status",
+        ],
+    }
 
 
 @app.get("/health")
 def health():
-    return {"ok": True, "app": APP_NAME}
+    try:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS count FROM quote_requests;")
+                row = cur.fetchone()
+
+        return {
+            "ok": True,
+            "app": APP_NAME,
+            "storage": "supabase_postgres",
+            "database_configured": bool(DATABASE_URL),
+            "quote_count": row["count"],
+            "storage_configured": storage_enabled(),
+            "supabase_url_configured": bool(SUPABASE_URL),
+            "supabase_service_key_configured": bool(SUPABASE_SERVICE_ROLE_KEY),
+            "supabase_bucket": SUPABASE_STORAGE_BUCKET,
+        }
+
+    except Exception as exc:
+        return {
+            "ok": False,
+            "app": APP_NAME,
+            "storage": "supabase_postgres",
+            "database_configured": bool(DATABASE_URL),
+            "error": str(exc),
+        }
+
+
+class AdminLoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+@app.post("/admin/login")
+def admin_login(request: AdminLoginRequest):
+    try:
+        valid = check_admin_credentials(request.username, request.password)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    if not valid:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    return {
+        "token": create_admin_token(request.username),
+        "expires_in_seconds": 60 * 60 * 12,
+    }
 
 
 @app.post("/quote-request")
@@ -132,13 +515,6 @@ async def quote_request(
     additional_notes: Optional[str] = Form(None),
     files: Optional[List[UploadFile]] = File(None),
 ):
-    """
-    Receives customer quote request from Shopify form.
-
-    File uploads are accepted for now but not persisted in this starter version.
-    Next upgrade should store files in Supabase Storage, S3, or Cloudflare R2.
-    """
-
     data = {
         "name": name,
         "email": email,
@@ -160,9 +536,21 @@ async def quote_request(
     ai_summary = ai_triage_summary(data)
     request_id = save_request(data, ai_summary)
 
-    notify_email = os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com")
+    stored_files = []
+    if files:
+        for file in files:
+            if storage_enabled():
+                stored = upload_file_to_supabase_storage(request_id, file)
+                if stored:
+                    stored_files.append(stored)
+            else:
+                stored_files.append({"filename": file.filename, "original_filename": file.filename, "storage_path": None})
+    if stored_files:
+        data["uploaded_files"] = stored_files
+        update_request_files(request_id, stored_files)
 
-    file_list = "<br>".join(data["uploaded_files"]) if data["uploaded_files"] else "No files uploaded"
+    notify_email = os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com")
+    file_list = "<br>".join([(f.get("original_filename") or f.get("filename")) if isinstance(f, dict) else str(f) for f in data["uploaded_files"]]) if data["uploaded_files"] else "No files uploaded"
 
     html_body = f"""
     <h2>New C3D Prints Quote Request #{request_id}</h2>
@@ -219,22 +607,6 @@ class PricingRequest(BaseModel):
 @app.post("/calculate")
 def calculate(request: PricingRequest):
     try:
-        settings = PricingSettings(
-            kwh=float(os.getenv("DEFAULT_KWH", 0.31)),
-            watts=float(os.getenv("DEFAULT_WATTS", 180)),
-            spool_usd=float(os.getenv("DEFAULT_SPOOL_USD", 20)),
-            spool_g=float(os.getenv("DEFAULT_SPOOL_G", 1000)),
-            nozzle_cost=float(os.getenv("DEFAULT_NOZZLE_COST", 8)),
-            nozzle_hours=float(os.getenv("DEFAULT_NOZZLE_HOURS", 400)),
-            sheet_cost=float(os.getenv("DEFAULT_SHEET_COST", 25)),
-            sheet_prints=float(os.getenv("DEFAULT_SHEET_PRINTS", 500)),
-            shipping=float(os.getenv("DEFAULT_SHIPPING", 5)),
-            boxing=float(os.getenv("DEFAULT_BOXING", 1.50)),
-            tax=float(os.getenv("DEFAULT_TAX", 6.25)),
-            markup=float(os.getenv("DEFAULT_MARKUP", 300)),
-            labor_rate=float(os.getenv("DEFAULT_LABOR_RATE", 35)),
-        )
-
         return calculate_quote(
             grams=request.grams,
             hours=request.hours,
@@ -245,7 +617,7 @@ def calculate(request: PricingRequest):
             rush_fee=request.rush_fee,
             complexity_multiplier=request.complexity_multiplier,
             include_shipping=request.include_shipping,
-            settings=settings,
+            settings=get_pricing_settings(),
         )
 
     except ValueError as exc:
@@ -253,15 +625,454 @@ def calculate(request: PricingRequest):
 
 
 @app.get("/admin/requests")
-def list_requests():
-    """
-    Simple admin endpoint for now.
-    Do not expose publicly long-term without auth.
-    """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM quote_requests ORDER BY id DESC LIMIT 100")
-    rows = [dict(row) for row in cur.fetchall()]
-    conn.close()
-    return rows
+def list_requests(admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
+                    actual_cost,
+                    profit_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
+                    status
+                FROM quote_requests
+                ORDER BY created_at DESC
+                LIMIT 100;
+                """
+            )
+            return cur.fetchall()
+
+
+class StatusUpdateRequest(BaseModel):
+    status: str
+
+
+@app.patch("/admin/requests/{request_id}/status")
+def update_request_status(
+    request_id: int,
+    request: StatusUpdateRequest,
+    admin=Depends(verify_admin),
+):
+    status = request.status.strip()
+
+    if status not in VALID_STATUSES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Valid statuses: {', '.join(sorted(VALID_STATUSES))}",
+        )
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                {"request_id": request_id},
+            )
+            existing = cur.fetchone()
+
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET status = %(status)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
+                    actual_cost,
+                    profit_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
+                    status;
+                """,
+                {"status": status, "request_id": request_id},
+            )
+            updated = cur.fetchone()
+
+    return {"success": True, "request": updated}
+
+class JobDetailsUpdateRequest(BaseModel):
+    final_price: Optional[float] = None
+    deposit_paid: bool = False
+    due_date: Optional[str] = None
+    print_notes: Optional[str] = None
+    actual_cost: Optional[float] = None
+    profit_notes: Optional[str] = None
+    approve: bool = False
+
+
+@app.patch("/admin/requests/{request_id}/job-details")
+def update_job_details(
+    request_id: int,
+    request: JobDetailsUpdateRequest,
+    admin=Depends(verify_admin),
+):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                {"request_id": request_id},
+            )
+            existing = cur.fetchone()
+
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            if request.approve:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        final_price = %(final_price)s,
+                        deposit_paid = %(deposit_paid)s,
+                        due_date = %(due_date)s,
+                        print_notes = %(print_notes)s,
+                        actual_cost = %(actual_cost)s,
+                        profit_notes = %(profit_notes)s,
+                        status = 'Approved'
+                    WHERE id = %(request_id)s
+                    RETURNING
+                        id,
+                        created_at,
+                        name,
+                        email,
+                        phone,
+                        project_description,
+                        quantity,
+                        approx_size,
+                        deadline,
+                        material_preference,
+                        color_preference,
+                        use_case,
+                        requirements,
+                        delivery_method,
+                        shipping_location,
+                        additional_notes,
+                        uploaded_files,
+                        ai_summary,
+                        final_price,
+                        deposit_paid,
+                        due_date,
+                        print_notes,
+                        actual_cost,
+                        profit_notes,
+                        quoted_price,
+                        quote_message,
+                        quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
+                        ai_quote_structured,
+                        status;
+                    """,
+                    {
+                        "request_id": request_id,
+                        "final_price": request.final_price,
+                        "deposit_paid": request.deposit_paid,
+                        "due_date": request.due_date,
+                        "print_notes": request.print_notes,
+                        "actual_cost": request.actual_cost,
+                        "profit_notes": request.profit_notes,
+                    },
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        final_price = %(final_price)s,
+                        deposit_paid = %(deposit_paid)s,
+                        due_date = %(due_date)s,
+                        print_notes = %(print_notes)s,
+                        actual_cost = %(actual_cost)s,
+                        profit_notes = %(profit_notes)s
+                    WHERE id = %(request_id)s
+                    RETURNING
+                        id,
+                        created_at,
+                        name,
+                        email,
+                        phone,
+                        project_description,
+                        quantity,
+                        approx_size,
+                        deadline,
+                        material_preference,
+                        color_preference,
+                        use_case,
+                        requirements,
+                        delivery_method,
+                        shipping_location,
+                        additional_notes,
+                        uploaded_files,
+                        ai_summary,
+                        final_price,
+                        deposit_paid,
+                        due_date,
+                        print_notes,
+                        actual_cost,
+                        profit_notes,
+                        quoted_price,
+                        quote_message,
+                        quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
+                        ai_quote_structured,
+                        status;
+                    """,
+                    {
+                        "request_id": request_id,
+                        "final_price": request.final_price,
+                        "deposit_paid": request.deposit_paid,
+                        "due_date": request.due_date,
+                        "print_notes": request.print_notes,
+                        "actual_cost": request.actual_cost,
+                        "profit_notes": request.profit_notes,
+                    },
+                )
+
+            updated = cur.fetchone()
+
+    return {"success": True, "request": updated}
+
+
+@app.get("/admin/analytics")
+def get_admin_analytics(admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*)::int AS total_requests,
+                    COUNT(*) FILTER (WHERE status = 'New')::int AS new_count,
+                    COUNT(*) FILTER (WHERE status = 'Need Info')::int AS need_info_count,
+                    COUNT(*) FILTER (WHERE status = 'Quoted')::int AS quoted_count,
+                    COUNT(*) FILTER (WHERE status = 'Approved')::int AS approved_count,
+                    COUNT(*) FILTER (WHERE status = 'Printing')::int AS printing_count,
+                    COUNT(*) FILTER (WHERE status = 'Completed')::int AS completed_count,
+                    COUNT(*) FILTER (WHERE status = 'Archived')::int AS archived_count,
+                    COALESCE(SUM(quoted_price) FILTER (WHERE status = 'Quoted'), 0)::float AS quoted_open_value,
+                    COALESCE(AVG(quoted_price) FILTER (WHERE quoted_price IS NOT NULL), 0)::float AS average_quote,
+                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing')), 0)::float AS active_job_value,
+                    COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS revenue_tracked,
+                    COALESCE(SUM(actual_cost) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS actual_cost_tracked,
+                    COALESCE(SUM(final_price - COALESCE(actual_cost,0)) FILTER (WHERE status IN ('Approved','Printing','Completed') AND final_price IS NOT NULL), 0)::float AS estimated_profit
+                FROM quote_requests;
+            """)
+            return cur.fetchone()
+
+@app.get("/admin/requests/{request_id}/files/{file_index}/download")
+def get_quote_file_download_url(request_id: int, file_index: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT uploaded_files FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    uploaded_files = row.get("uploaded_files") or []
+    if file_index < 0 or file_index >= len(uploaded_files):
+        raise HTTPException(status_code=404, detail="File not found")
+    file_info = uploaded_files[file_index]
+    if not isinstance(file_info, dict) or not file_info.get("storage_path"):
+        raise HTTPException(status_code=404, detail="This file does not have cloud storage metadata")
+    return {
+        "success": True,
+        "filename": file_info.get("original_filename") or file_info.get("filename"),
+        "url": create_signed_file_url(file_info["storage_path"]),
+        "expires_in_seconds": 3600,
+    }
+
+class SendQuoteRequest(BaseModel):
+    subject: str = "Your C3D Prints Custom Quote"
+    message: str
+    quoted_price: Optional[float] = None
+
+
+@app.post("/admin/requests/{request_id}/send-quote")
+def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Depends(verify_admin)):
+    message = request.message.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Quote message cannot be empty")
+    subject = request.subject.strip() or "Your C3D Prints Custom Quote"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, email FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
+            quote_request = cur.fetchone()
+            if not quote_request:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+            html_body = f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre></div>"""
+            email_result = send_quote_notification(to_email=quote_request["email"], subject=subject, html_body=html_body, text_body=message)
+            if not email_result.get("sent"):
+                raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
+            cur.execute("""
+                UPDATE quote_requests
+                SET status = 'Quoted', quoted_price = %(quoted_price)s, quote_message = %(quote_message)s, quote_sent_at = %(quote_sent_at)s
+                WHERE id = %(request_id)s
+                RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
+                    material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
+                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
+            """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
+            updated = cur.fetchone()
+    return {"success": True, "email": email_result, "request": updated}
+
+
+@app.post("/admin/requests/{request_id}/ai-quote-assist")
+def create_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
+                    actual_cost,
+                    profit_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
+                    status
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            assist = generate_ai_quote_assist(row)
+            structured = extract_ai_quote_structured(assist)
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET
+                    ai_quote_assist = %(ai_quote_assist)s,
+                    ai_quote_assist_at = %(ai_quote_assist_at)s,
+                    ai_quote_structured = %(ai_quote_structured)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id,
+                    created_at,
+                    name,
+                    email,
+                    phone,
+                    project_description,
+                    quantity,
+                    approx_size,
+                    deadline,
+                    material_preference,
+                    color_preference,
+                    use_case,
+                    requirements,
+                    delivery_method,
+                    shipping_location,
+                    additional_notes,
+                    uploaded_files,
+                    ai_summary,
+                    final_price,
+                    deposit_paid,
+                    due_date,
+                    print_notes,
+                    actual_cost,
+                    profit_notes,
+                    quoted_price,
+                    quote_message,
+                    quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
+                    status;
+                """,
+                {
+                    "request_id": request_id,
+                    "ai_quote_assist": assist,
+                    "ai_quote_assist_at": datetime.now(timezone.utc),
+                    "ai_quote_structured": Json(structured),
+                },
+            )
+            updated = cur.fetchone()
+
+    return {
+        "success": True,
+        "request": updated,
+        "ai_quote_assist": assist,
+        "ai_quote_structured": structured,
+    }
+
+

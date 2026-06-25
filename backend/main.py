@@ -1,6 +1,8 @@
 import json
+import math
 import os
 import re
+import struct
 from datetime import datetime, timezone
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -14,7 +16,6 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from openai import OpenAI
 
 from ai_triage import ai_triage_summary
 from auth import check_admin_credentials, create_admin_token, verify_admin
@@ -24,7 +25,6 @@ from pricing_engine import PricingSettings, calculate_quote
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
-AI_QUOTE_MODEL = os.getenv("AI_QUOTE_MODEL", "gpt-4o-mini")
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -79,6 +79,96 @@ def get_conn():
 
 
 
+
+MATERIAL_DENSITY_G_CM3 = {"PLA": 1.24, "PETG": 1.27, "ABS": 1.04, "ASA": 1.07, "TPU": 1.20}
+
+def guess_material_density(material_preference: Optional[str]) -> float:
+    material = (material_preference or "PLA").upper()
+    if "PETG" in material: return MATERIAL_DENSITY_G_CM3["PETG"]
+    if "ABS" in material: return MATERIAL_DENSITY_G_CM3["ABS"]
+    if "ASA" in material: return MATERIAL_DENSITY_G_CM3["ASA"]
+    if "TPU" in material or "FLEX" in material: return MATERIAL_DENSITY_G_CM3["TPU"]
+    return MATERIAL_DENSITY_G_CM3["PLA"]
+
+def triangle_signed_volume(a, b, c) -> float:
+    return (a[0]*(b[1]*c[2]-b[2]*c[1])-a[1]*(b[0]*c[2]-b[2]*c[0])+a[2]*(b[0]*c[1]-b[1]*c[0]))/6.0
+
+def triangle_area(a, b, c) -> float:
+    ab=(b[0]-a[0],b[1]-a[1],b[2]-a[2]); ac=(c[0]-a[0],c[1]-a[1],c[2]-a[2])
+    cross=(ab[1]*ac[2]-ab[2]*ac[1],ab[2]*ac[0]-ab[0]*ac[2],ab[0]*ac[1]-ab[1]*ac[0])
+    return 0.5*math.sqrt(cross[0]**2+cross[1]**2+cross[2]**2)
+
+def analyze_binary_stl(raw: bytes) -> Optional[dict]:
+    if len(raw) < 84: return None
+    tri_count = struct.unpack("<I", raw[80:84])[0]
+    if 84 + tri_count * 50 > len(raw): return None
+    min_x=min_y=min_z=float("inf"); max_x=max_y=max_z=float("-inf")
+    signed_volume=0.0; surface_area=0.0; offset=84
+    for _ in range(tri_count):
+        offset += 12
+        verts=[]
+        for _ in range(3):
+            x,y,z=struct.unpack("<fff", raw[offset:offset+12]); offset += 12
+            verts.append((x,y,z))
+            min_x,min_y,min_z=min(min_x,x),min(min_y,y),min(min_z,z)
+            max_x,max_y,max_z=max(max_x,x),max(max_y,y),max(max_z,z)
+        offset += 2
+        signed_volume += triangle_signed_volume(verts[0],verts[1],verts[2])
+        surface_area += triangle_area(verts[0],verts[1],verts[2])
+    if tri_count <= 0 or min_x == float("inf"): return None
+    return {"triangle_count":tri_count,"bbox":{"x":max_x-min_x,"y":max_y-min_y,"z":max_z-min_z},"volume_units3":abs(signed_volume),"surface_area_units2":surface_area}
+
+def analyze_ascii_stl(raw: bytes) -> Optional[dict]:
+    text=raw.decode("utf-8", errors="ignore")
+    if "vertex" not in text.lower(): return None
+    verts=[]
+    for line in text.splitlines():
+        p=line.strip().split()
+        if len(p)==4 and p[0].lower()=="vertex":
+            try: verts.append((float(p[1]),float(p[2]),float(p[3])))
+            except ValueError: pass
+    if len(verts)<3: return None
+    min_x=min(v[0] for v in verts); min_y=min(v[1] for v in verts); min_z=min(v[2] for v in verts)
+    max_x=max(v[0] for v in verts); max_y=max(v[1] for v in verts); max_z=max(v[2] for v in verts)
+    signed_volume=0.0; surface_area=0.0; tri_count=len(verts)//3
+    for i in range(0, tri_count*3, 3):
+        a,b,c=verts[i],verts[i+1],verts[i+2]
+        signed_volume += triangle_signed_volume(a,b,c)
+        surface_area += triangle_area(a,b,c)
+    return {"triangle_count":tri_count,"bbox":{"x":max_x-min_x,"y":max_y-min_y,"z":max_z-min_z},"volume_units3":abs(signed_volume),"surface_area_units2":surface_area}
+
+def estimate_print_hours_from_stl(volume_cm3: float, height_mm: float, complexity: str) -> float:
+    rate = 8.0 if complexity=="Low" else 6.5 if complexity=="Medium" else 5.0
+    return round(max((volume_cm3/rate) + max(0,height_mm-30)/60 + 0.5, 0.5), 2)
+
+def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[str]) -> Optional[dict]:
+    if not filename.lower().endswith(".stl"): return None
+    parsed = analyze_binary_stl(raw) or analyze_ascii_stl(raw)
+    if not parsed: return {"filename":filename,"error":"Could not parse STL file."}
+    bbox=parsed["bbox"]; x,y,z=bbox["x"],bbox["y"],bbox["z"]
+    volume_cm3=parsed["volume_units3"]/1000.0; surface_area_cm2=parsed["surface_area_units2"]/100.0
+    density=guess_material_density(material_preference)
+    grams=volume_cm3*density
+    largest=max(x,y,z)
+    complexity="High" if parsed["triangle_count"]>100000 or z>120 or largest>220 else "Medium" if parsed["triangle_count"]>25000 or z>60 or largest>120 else "Low"
+    return {
+        "filename":filename,
+        "type":"stl_analysis_v1",
+        "units_assumed":"mm",
+        "triangle_count":parsed["triangle_count"],
+        "dimensions_mm":{"x":round(x,2),"y":round(y,2),"z":round(z,2)},
+        "volume_cm3":round(volume_cm3,2),
+        "surface_area_cm2":round(surface_area_cm2,2),
+        "material_density_g_cm3":density,
+        "estimated_grams_solid":round(grams,1),
+        "estimated_hours_rough":estimate_print_hours_from_stl(volume_cm3,z,complexity),
+        "complexity":complexity,
+        "complexity_multiplier":{"Low":1.0,"Medium":1.25,"High":1.5}.get(complexity,1.25),
+        "fail_rate":{"Low":20,"Medium":30,"High":45}.get(complexity,30),
+        "warning":"Rough estimate only. True print time and grams require slicer settings, infill, layer height, supports, and orientation."
+    }
+
+
 def safe_storage_filename(filename: str) -> str:
     name = os.path.basename(filename or "uploaded-file")
     name = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
@@ -96,6 +186,10 @@ def upload_file_to_supabase_storage(request_id: int, file: UploadFile) -> Option
     storage_path = f"quote-requests/{request_id}/{filename}"
     upload_url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
     contents = file.file.read()
+    try:
+        file.file.seek(0)
+    except Exception:
+        pass
     headers = {
         "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
         "apikey": SUPABASE_SERVICE_ROLE_KEY,
@@ -185,10 +279,7 @@ def init_db():
                     profit_notes TEXT,
                     quoted_price NUMERIC,
                     quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ,
-                    ai_quote_assist TEXT,
-                    ai_quote_assist_at TIMESTAMPTZ,
-                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
+                    quote_sent_at TIMESTAMPTZ
                 );
                 """
             )
@@ -213,9 +304,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
 
 
 
@@ -272,155 +360,6 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
                 {"uploaded_files": Json(uploaded_files), "request_id": request_id},
             )
 
-
-
-
-
-def extract_ai_quote_structured(text: str) -> dict:
-    if not text:
-        return {}
-
-    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
-    raw = match.group(1) if match else ""
-
-    if not raw:
-        match = re.search(r"(\{.*\})", text, re.DOTALL)
-        raw = match.group(1) if match else ""
-
-    if not raw:
-        return {}
-
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return {}
-
-    if not isinstance(parsed, dict):
-        return {}
-
-    allowed = {
-        "recommended_material",
-        "complexity",
-        "estimated_grams",
-        "estimated_hours",
-        "complexity_multiplier",
-        "fail_rate",
-        "price_min",
-        "price_max",
-        "risk_flags",
-        "questions_for_customer",
-        "customer_reply",
-        "internal_notes",
-        "confidence",
-    }
-
-    return {key: parsed.get(key) for key in allowed if key in parsed}
-
-
-def build_ai_quote_assist_prompt(row: dict) -> str:
-    uploaded_files = row.get("uploaded_files") or []
-    file_names = []
-
-    for file in uploaded_files:
-        if isinstance(file, dict):
-            file_names.append(file.get("original_filename") or file.get("filename") or "uploaded file")
-        else:
-            file_names.append(str(file))
-
-    return f"""
-You are helping C3D Prints, a small 3D printing business, review a customer quote request.
-
-Do not invent exact print time, filament weight, or final price unless the customer gave enough detail.
-Give a practical quote-assist summary for the shop owner.
-
-Customer:
-- Name: {row.get("name")}
-- Email: {row.get("email")}
-
-Request:
-- Description: {row.get("project_description")}
-- Quantity: {row.get("quantity")}
-- Approx size: {row.get("approx_size")}
-- Deadline: {row.get("deadline")}
-- Material preference: {row.get("material_preference")}
-- Color preference: {row.get("color_preference")}
-- Use case: {row.get("use_case")}
-- Requirements: {row.get("requirements")}
-- Delivery method: {row.get("delivery_method")}
-- Shipping location: {row.get("shipping_location")}
-- Additional notes: {row.get("additional_notes")}
-- Uploaded files: {", ".join(file_names) if file_names else "None"}
-
-Return a readable shop-owner summary and then return valid JSON in this exact schema inside a fenced code block labeled json.
-Use null when unknown. Do not invent exact numbers without enough evidence.
-
-AI QUOTE ASSIST
-
-Recommended Material:
-- ...
-
-Complexity:
-- Low / Medium / High
-- Why:
-
-Risks / Questions:
-- ...
-
-Suggested Pricing Inputs:
-- Estimated grams:
-- Estimated print hours:
-- Complexity multiplier suggestion:
-- Fail rate suggestion:
-
-Suggested Customer Reply:
-Hi [first name],
-...
-
-Internal Notes:
-- ...
-
-```json
-{{
-  "recommended_material": null,
-  "complexity": "Low|Medium|High|Unknown",
-  "estimated_grams": null,
-  "estimated_hours": null,
-  "complexity_multiplier": null,
-  "fail_rate": 30,
-  "price_min": null,
-  "price_max": null,
-  "risk_flags": [],
-  "questions_for_customer": [],
-  "customer_reply": null,
-  "internal_notes": null,
-  "confidence": "Low|Medium|High"
-}}
-```
-""".strip()
-
-
-def generate_ai_quote_assist(row: dict) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured in Render")
-
-    client = OpenAI(api_key=api_key)
-    prompt = build_ai_quote_assist_prompt(row)
-
-    response = client.chat.completions.create(
-        model=AI_QUOTE_MODEL,
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a practical 3D print shop quoting assistant. Be concise, careful, and do not invent exact measurements or prices without enough evidence.",
-            },
-            {"role": "user", "content": prompt},
-        ],
-        temperature=0.3,
-    )
-
-    return response.choices[0].message.content.strip()
 
 
 
@@ -539,12 +478,29 @@ async def quote_request(
     stored_files = []
     if files:
         for file in files:
+            if not file.filename:
+                continue
+
+            raw_for_analysis = file.file.read()
+            try:
+                file.file.seek(0)
+            except Exception:
+                pass
+
+            stl_analysis = analyze_stl_bytes(raw_for_analysis, file.filename, material_preference)
+
             if storage_enabled():
                 stored = upload_file_to_supabase_storage(request_id, file)
                 if stored:
+                    if stl_analysis:
+                        stored["stl_analysis"] = stl_analysis
                     stored_files.append(stored)
             else:
-                stored_files.append({"filename": file.filename, "original_filename": file.filename, "storage_path": None})
+                metadata = {"filename": file.filename, "original_filename": file.filename, "storage_path": None}
+                if stl_analysis:
+                    metadata["stl_analysis"] = stl_analysis
+                stored_files.append(metadata)
+
     if stored_files:
         data["uploaded_files"] = stored_files
         update_request_files(request_id, stored_files)
@@ -658,9 +614,6 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -732,9 +685,6 @@ def update_request_status(
                     quoted_price,
                     quote_message,
                     quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -811,9 +761,6 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
-                        ai_quote_assist,
-                        ai_quote_assist_at,
-                        ai_quote_structured,
                         status;
                     """,
                     {
@@ -866,9 +813,6 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
-                        ai_quote_assist,
-                        ai_quote_assist_at,
-                        ai_quote_structured,
                         status;
                     """,
                     {
@@ -961,118 +905,7 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
-                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
+                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, status;
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
-
-
-@app.post("/admin/requests/{request_id}/ai-quote-assist")
-def create_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT
-                    id,
-                    created_at,
-                    name,
-                    email,
-                    phone,
-                    project_description,
-                    quantity,
-                    approx_size,
-                    deadline,
-                    material_preference,
-                    color_preference,
-                    use_case,
-                    requirements,
-                    delivery_method,
-                    shipping_location,
-                    additional_notes,
-                    uploaded_files,
-                    ai_summary,
-                    final_price,
-                    deposit_paid,
-                    due_date,
-                    print_notes,
-                    actual_cost,
-                    profit_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
-                    status
-                FROM quote_requests
-                WHERE id = %(request_id)s;
-                """,
-                {"request_id": request_id},
-            )
-            row = cur.fetchone()
-
-            if not row:
-                raise HTTPException(status_code=404, detail="Quote request not found")
-
-            assist = generate_ai_quote_assist(row)
-            structured = extract_ai_quote_structured(assist)
-
-            cur.execute(
-                """
-                UPDATE quote_requests
-                SET
-                    ai_quote_assist = %(ai_quote_assist)s,
-                    ai_quote_assist_at = %(ai_quote_assist_at)s,
-                    ai_quote_structured = %(ai_quote_structured)s
-                WHERE id = %(request_id)s
-                RETURNING
-                    id,
-                    created_at,
-                    name,
-                    email,
-                    phone,
-                    project_description,
-                    quantity,
-                    approx_size,
-                    deadline,
-                    material_preference,
-                    color_preference,
-                    use_case,
-                    requirements,
-                    delivery_method,
-                    shipping_location,
-                    additional_notes,
-                    uploaded_files,
-                    ai_summary,
-                    final_price,
-                    deposit_paid,
-                    due_date,
-                    print_notes,
-                    actual_cost,
-                    profit_notes,
-                    quoted_price,
-                    quote_message,
-                    quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
-                    status;
-                """,
-                {
-                    "request_id": request_id,
-                    "ai_quote_assist": assist,
-                    "ai_quote_assist_at": datetime.now(timezone.utc),
-                    "ai_quote_structured": Json(structured),
-                },
-            )
-            updated = cur.fetchone()
-
-    return {
-        "success": True,
-        "request": updated,
-        "ai_quote_assist": assist,
-        "ai_quote_structured": structured,
-    }
-
-
