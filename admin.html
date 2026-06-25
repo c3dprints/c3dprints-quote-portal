@@ -8,13 +8,13 @@
 :root{--bg:#0b1623;--surface:#111e2e;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#00aaff;--blue-l:#33ccff;--orange:#ff6b1a;--orange-l:#ff8c3a;--green:#00e890;--red:#ff3d5a;--text:#ddeeff;--muted:#7fa0bd}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif}button,input,select{font-family:inherit}
 #login-gate{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}.gate-card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--border);border-radius:18px;padding:24px;text-align:center}.gate-card h1{color:var(--blue-l);margin:0 0 8px}.gate-card p{color:var(--muted);margin:0 0 18px}.gate-card input{width:100%;background:var(--input);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:13px;font-size:16px;margin-bottom:12px}
-.primary-btn{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:bold;letter-spacing:1px;cursor:pointer}.secondary-btn{background:linear-gradient(135deg,#005f8f,#00aaff);color:white;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.ghost-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:10px 12px;cursor:pointer}
+.primary-btn{width:100%;background:linear-gradient(135deg,var(--orange),var(--orange-l));color:white;border:none;border-radius:14px;padding:14px;font-size:15px;font-weight:bold;letter-spacing:1px;cursor:pointer}.secondary-btn{background:linear-gradient(135deg,#005f8f,#00aaff);color:white;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.send-btn{background:linear-gradient(135deg,#008f5f,#00e890);color:#06140d;border:none;border-radius:12px;padding:12px 14px;font-size:14px;font-weight:bold;cursor:pointer}.ghost-btn{background:transparent;border:1px solid var(--border);color:var(--muted);border-radius:10px;padding:10px 12px;cursor:pointer}
 #login-error,.error{color:var(--red);margin-top:10px;font-size:14px}#app{display:none;min-height:100vh}
 header{background:var(--surface);border-bottom:1px solid var(--border);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;gap:16px;position:sticky;top:0;z-index:10}header h1{margin:0;color:var(--blue-l);font-size:20px}header p{margin:4px 0 0;color:var(--muted);font-size:13px}.header-actions{display:flex;gap:10px;align-items:center}
 .layout{display:grid;grid-template-columns:380px 1fr;min-height:calc(100vh - 74px)}.sidebar{border-right:1px solid var(--border);background:#0d1928;padding:14px;overflow:auto}.main{padding:16px;overflow:auto}.card{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:16px;margin-bottom:14px}.card h2{color:var(--blue);font-size:16px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--border)}
 .request-card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:14px;margin-bottom:12px;cursor:pointer;transition:.15s}.request-card:hover{border-color:var(--blue)}.request-card.active{border-color:var(--orange);box-shadow:0 0 0 2px rgba(255,107,26,.15)}.req-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.req-id{color:var(--orange-l);font-weight:bold}.req-name{font-weight:bold;color:var(--text)}.req-date{color:var(--muted);font-size:12px}.req-project{color:var(--muted);margin-top:8px;font-size:13px;line-height:1.35}.status{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:4px 8px;font-size:12px;color:var(--muted);margin-top:8px}.status.New{color:var(--green);border-color:rgba(0,232,144,.4)}
 .detail-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.detail-item{background:var(--input);border:1px solid var(--border);border-radius:10px;padding:11px}.detail-item label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}.detail-item strong{color:var(--text);font-size:14px}.ai-box,.quote-box{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;white-space:pre-wrap;line-height:1.5;color:var(--text);font-size:14px;max-height:360px;overflow:auto}
-.calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}
+.calc-grid,.job-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.field label{display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px}.field input,.field select{width:100%;background:var(--input);border:1px solid var(--border);border-radius:10px;color:var(--text);padding:12px;font-size:15px}.results-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:14px}.result-cell{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;text-align:center}.result-cell .value{font-size:20px;color:var(--green);font-weight:bold}.result-cell .label{color:var(--muted);font-size:12px;margin-top:4px}.action-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}.action-row button{flex:1;min-width:160px}.empty{color:var(--muted);text-align:center;padding:40px 20px}.search-row{display:flex;gap:8px;margin-bottom:12px}.search-row input{flex:1;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:11px}.hidden{display:none}.file-row{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px;margin-bottom:10px}.file-row strong{display:block;color:var(--text);margin-bottom:4px}.file-meta{color:var(--muted);font-size:12px;line-height:1.5}
 @media(max-width:980px){.kanban-board{grid-template-columns:repeat(5,260px);}.layout{grid-template-columns:1fr}.sidebar{border-right:none;border-bottom:1px solid var(--border);max-height:45vh}.detail-grid,.calc-grid,.job-grid,.results-grid{grid-template-columns:1fr}header{align-items:flex-start;flex-direction:column}.header-actions{width:100%}.header-actions button{flex:1}}
 </style>
 </head>
@@ -72,9 +72,41 @@ header{background:var(--surface);border-bottom:1px solid var(--border);padding:1
   <div id="job-message" class="success-msg"></div>
   <div id="job-error" class="error"></div>
 </div>
+<div class="card"><h2>Uploaded Files</h2><div id="uploaded-files" class="quote-box">No files uploaded.</div></div>
 <div class="card"><h2>Project Description</h2><div id="d-project" class="ai-box"></div></div>
   <div class="card"><h2>AI Triage Summary</h2><div id="d-ai" class="ai-box"></div></div>
-  <div class="card"><h2>Calculate Quote</h2><div class="calc-grid">
+  
+<div class="card"><h2>AI Quote Assistant</h2>
+  <div id="ai-quote-assist-box" class="quote-box">No AI quote assist generated yet.</div>
+  <div class="action-row">
+    <button class="secondary-btn" onclick="generateAiQuoteAssist()">Generate AI Quote Assist</button>
+    <button class="ghost-btn" onclick="copyAiQuoteAssist()">Copy AI Assist</button>
+    <button class="ghost-btn" onclick="useAiCustomerReply()">Use Suggested Reply</button>
+  </div>
+  <div id="ai-assist-message" class="success-msg"></div>
+  <div id="ai-assist-error" class="error"></div>
+</div>
+<div class="card"><h2>AI Structured Quote Data</h2>
+  <div class="detail-grid">
+    <div class="detail-item"><label>Material</label><strong id="ai-s-material">--</strong></div>
+    <div class="detail-item"><label>Complexity</label><strong id="ai-s-complexity">--</strong></div>
+    <div class="detail-item"><label>Confidence</label><strong id="ai-s-confidence">--</strong></div>
+    <div class="detail-item"><label>Estimated Grams</label><strong id="ai-s-grams">--</strong></div>
+    <div class="detail-item"><label>Estimated Hours</label><strong id="ai-s-hours">--</strong></div>
+    <div class="detail-item"><label>Fail Rate</label><strong id="ai-s-fail">--</strong></div>
+    <div class="detail-item"><label>Price Min</label><strong id="ai-s-price-min">--</strong></div>
+    <div class="detail-item"><label>Price Max</label><strong id="ai-s-price-max">--</strong></div>
+    <div class="detail-item"><label>Multiplier</label><strong id="ai-s-multiplier">--</strong></div>
+  </div>
+  <div style="margin-top:12px;">
+    <label style="display:block;color:var(--muted);font-size:12px;font-weight:bold;margin-bottom:6px;">Risk Flags / Questions</label>
+    <div id="ai-s-risks" class="quote-box">--</div>
+  </div>
+  <div class="action-row">
+    <button class="send-btn" onclick="applyAiStructuredToCalculator()">Auto-fill Calculator</button>
+  </div>
+</div>
+<div class="card"><h2>Calculate Quote</h2><div class="calc-grid">
     <div class="field"><label>Filament Used (grams)</label><input id="grams" type="number" step="0.1" placeholder="100"></div>
     <div class="field"><label>Print Time (hours)</label><input id="hours" type="number" step="0.1" placeholder="6.5"></div>
     <div class="field"><label>Quantity</label><input id="quantity" type="number" min="1" value="1"></div>
@@ -188,10 +220,10 @@ function selectRequest(id){
   $("d-use").textContent=selectedRequest.use_case||"--";
   $("d-delivery").textContent=selectedRequest.delivery_method||"--";$("d-final-price").textContent=selectedRequest.final_price?money(selectedRequest.final_price):"--";$("d-deposit-paid").textContent=selectedRequest.deposit_paid?"Yes":"No";$("d-due-date").textContent=selectedRequest.due_date||"--";
   $("d-project").textContent=selectedRequest.project_description||"--";
-  $("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";
+  $("d-ai").textContent=selectedRequest.ai_summary||"No AI summary available.";$("ai-quote-assist-box").textContent=selectedRequest.ai_quote_assist||"No AI quote assist generated yet.";renderAiStructured();renderUploadedFiles();
   $("quantity").value=selectedRequest.quantity||1;$("job-final-price").value=selectedRequest.final_price||"";$("job-deposit-paid").value=selectedRequest.deposit_paid?"true":"false";$("job-due-date").value=selectedRequest.due_date||"";$("job-print-notes").value=selectedRequest.print_notes||"";
   $("calc-results").classList.add("hidden");
-  $("customer-quote").textContent="Calculate a quote to generate reply text.";
+  setCustomerQuoteText("Calculate a quote to generate reply text.");
   latestQuoteText="";
   renderRequests();
 }
@@ -210,7 +242,7 @@ async function calculateQuote(){
     $("r-profit-unit").textContent=money(data.per_unit.profit);
     $("calc-results").classList.remove("hidden");
     latestQuoteText=buildReplyWithCustomer(data.customer_quote);
-    $("customer-quote").textContent=latestQuoteText;
+    setCustomerQuoteText(latestQuoteText);
   }catch(error){
     $("calc-error").textContent=error.message||"Something went wrong.";
   }
@@ -221,33 +253,53 @@ function buildReplyWithCustomer(quoteText){
   return `Hi ${firstName},\n\n${quoteText}\n\nThank you,\nC3D Prints`;
 }
 
-async function copyCustomerQuote(){const text=latestQuoteText||$("customer-quote").textContent;await navigator.clipboard.writeText(text);alert("Quote text copied.")}
+async function copyCustomerQuote(){const text=latestQuoteText||getCustomerQuoteText();await navigator.clipboard.writeText(text);alert("Quote text copied.")}
 async function copyCustomerEmail(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}await navigator.clipboard.writeText(selectedRequest.email);alert("Customer email copied.")}
-function openEmailClient(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}const subject=encodeURIComponent("Your C3D Prints Custom Quote");const body=encodeURIComponent(latestQuoteText||$("customer-quote").textContent||"");window.location.href=`mailto:${selectedRequest.email}?subject=${subject}&body=${body}`}
+function openEmailClient(){if(!selectedRequest||!selectedRequest.email){alert("No customer email selected.");return}const subject=encodeURIComponent("Your C3D Prints Custom Quote");const body=encodeURIComponent(latestQuoteText||getCustomerQuoteText()||"");window.location.href=`mailto:${selectedRequest.email}?subject=${subject}&body=${body}`}
 function escapeHtml(value){return String(value).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;").replaceAll('"',"&quot;").replaceAll("'","&#039;")}
 
+function setCustomerQuoteText(text){
+  const box=$("customer-quote");
+  if(!box)return;
+  if("value" in box)box.value=text;else box.textContent=text;
+}
+function getCustomerQuoteText(){
+  const box=$("customer-quote");
+  if(!box)return "";
+  return ("value" in box)?box.value:box.textContent;
+}
+function getAiStructured(){
+  if(!selectedRequest||!selectedRequest.ai_quote_structured)return {};
+  if(typeof selectedRequest.ai_quote_structured==="string"){
+    try{return JSON.parse(selectedRequest.ai_quote_structured)||{};}catch(e){return {};}
+  }
+  return selectedRequest.ai_quote_structured||{};
+}
+function renderAiStructured(){
+  const data=getAiStructured();
+  const set=(id,value)=>{if($(id))$(id).textContent=(value===null||value===undefined||value==="")?"--":String(value);};
+  set("ai-s-material",data.recommended_material);
+  set("ai-s-complexity",data.complexity);
+  set("ai-s-confidence",data.confidence);
+  set("ai-s-grams",data.estimated_grams);
+  set("ai-s-hours",data.estimated_hours);
+  set("ai-s-fail",data.fail_rate);
+  set("ai-s-price-min",data.price_min!==null&&data.price_min!==undefined?money(data.price_min):null);
+  set("ai-s-price-max",data.price_max!==null&&data.price_max!==undefined?money(data.price_max):null);
+  set("ai-s-multiplier",data.complexity_multiplier);
+  const risks=[...(data.risk_flags||[]),...(data.questions_for_customer||[])];
+  if($("ai-s-risks"))$("ai-s-risks").textContent=risks.length?risks.map(i=>"- "+i).join("\n"):"--";
+}
 function getBestStlAnalysis(){
-  if(!selectedRequest || !selectedRequest.uploaded_files) return null;
+  if(!selectedRequest||!selectedRequest.uploaded_files)return null;
   for(const file of selectedRequest.uploaded_files){
-    if(file && typeof file==="object" && file.stl_analysis && !file.stl_analysis.error) return file.stl_analysis;
+    if(file&&typeof file==="object"&&file.stl_analysis&&!file.stl_analysis.error)return file.stl_analysis;
   }
   return null;
 }
-
-function applyStlAnalysisToCalculator(){
-  const analysis=getBestStlAnalysis();
-  if(!analysis){alert("No usable STL analysis found for this request.");return;}
-  let applied=[];
-  if(analysis.estimated_grams_solid){$("grams").value=Number(analysis.estimated_grams_solid);applied.push("grams");}
-  if(analysis.estimated_hours_rough){$("hours").value=Number(analysis.estimated_hours_rough);applied.push("rough print hours");}
-  if(analysis.fail_rate!==undefined){$("fail_rate").value=Number(analysis.fail_rate);applied.push("fail rate");}
-  if(analysis.complexity_multiplier){$("complexity_multiplier").value=String(analysis.complexity_multiplier);applied.push("complexity");}
-  alert("Applied STL analysis: "+applied.join(", "));
-}
-
 function formatStlAnalysis(analysis){
-  if(!analysis) return "";
-  if(analysis.error) return `<div class="file-meta">STL analysis error: ${escapeHtml(analysis.error)}</div>`;
+  if(!analysis)return "";
+  if(analysis.error)return `<div class="file-meta">STL analysis error: ${escapeHtml(analysis.error)}</div>`;
   const d=analysis.dimensions_mm||{};
   return `<div class="file-meta" style="margin-top:8px;line-height:1.5;">
     <strong>STL Analysis</strong><br>
@@ -261,7 +313,90 @@ function formatStlAnalysis(analysis){
     <button class="send-btn" style="margin-top:8px;" onclick="applyStlAnalysisToCalculator()">Auto-fill From STL</button>
   </div>`;
 }
-
+function applyStlAnalysisToCalculator(){
+  const analysis=getBestStlAnalysis();
+  if(!analysis){alert("No usable STL analysis found for this request.");return;}
+  let applied=[];
+  if(analysis.estimated_grams_solid){$("grams").value=Number(analysis.estimated_grams_solid);applied.push("grams");}
+  if(analysis.estimated_hours_rough){$("hours").value=Number(analysis.estimated_hours_rough);applied.push("rough print hours");}
+  if(analysis.fail_rate!==undefined){$("fail_rate").value=Number(analysis.fail_rate);applied.push("fail rate");}
+  if(analysis.complexity_multiplier){$("complexity_multiplier").value=String(analysis.complexity_multiplier);applied.push("complexity");}
+  alert("Applied STL analysis: "+applied.join(", "));
+}
+function renderUploadedFiles(){
+  const box=$("uploaded-files");
+  if(!box||!selectedRequest)return;
+  const files=selectedRequest.uploaded_files||[];
+  if(!files.length){box.textContent="No files uploaded.";return;}
+  box.innerHTML=files.map((file,index)=>{
+    const name=escapeHtml((typeof file==="string")?file:(file.original_filename||file.filename||"Uploaded file"));
+    const size=(typeof file==="object"&&file.size_bytes)?` · ${Math.round(file.size_bytes/1024)} KB`:"";
+    const hasStorage=(typeof file==="object"&&file.storage_path);
+    const btn=hasStorage?`<button class="secondary-btn" style="margin-top:8px;" onclick="downloadUploadedFile(${index})">Download</button>`:`<div class="file-meta">File available by email only.</div>`;
+    const stl=(typeof file==="object"&&file.stl_analysis)?formatStlAnalysis(file.stl_analysis):"";
+    return `<div class="file-row"><strong>${name}</strong><span class="file-meta">${size}</span><br>${btn}${stl}</div>`;
+  }).join("");
+}
+async function downloadUploadedFile(index){
+  if(!selectedRequest)return;
+  try{
+    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/files/${index}/download`);
+    if(!response.ok){const problem=await response.json().catch(()=>({detail:"Could not get file link"}));throw new Error(problem.detail||"Could not get file link");}
+    const data=await response.json();window.open(data.url,"_blank");
+  }catch(error){alert(error.message||"Could not download file.");}
+}
+async function generateAiQuoteAssist(){
+  if(!selectedRequest){alert("Select a request first.");return;}
+  if($("ai-assist-message"))$("ai-assist-message").textContent="";
+  if($("ai-assist-error"))$("ai-assist-error").textContent="";
+  if($("ai-quote-assist-box"))$("ai-quote-assist-box").textContent="Generating AI quote assist...";
+  try{
+    const response=await apiFetch(`${API_BASE}/admin/requests/${selectedRequest.id}/ai-quote-assist`,{method:"POST"});
+    if(!response.ok){const problem=await response.json().catch(()=>({detail:"AI quote assist failed"}));throw new Error(problem.detail||"AI quote assist failed");}
+    const data=await response.json();
+    const idx=requests.findIndex(r=>Number(r.id)===Number(selectedRequest.id));
+    if(idx>=0)requests[idx]=data.request;
+    selectedRequest=data.request;
+    if($("ai-quote-assist-box"))$("ai-quote-assist-box").textContent=data.ai_quote_assist||data.request.ai_quote_assist||"No AI quote assist returned.";
+    selectedRequest.ai_quote_structured=data.ai_quote_structured||data.request.ai_quote_structured||{};
+    renderAiStructured();
+    if($("ai-assist-message"))$("ai-assist-message").textContent="AI quote assist generated.";
+    renderRequests();
+  }catch(error){
+    if($("ai-assist-error"))$("ai-assist-error").textContent=error.message||"AI quote assist failed";
+    if($("ai-quote-assist-box"))$("ai-quote-assist-box").textContent=selectedRequest.ai_quote_assist||"No AI quote assist generated yet.";
+    renderAiStructured();
+  }
+}
+async function copyAiQuoteAssist(){
+  const text=$("ai-quote-assist-box")?$("ai-quote-assist-box").textContent.trim():"";
+  if(!text||text==="No AI quote assist generated yet."){alert("No AI quote assist to copy yet.");return;}
+  await navigator.clipboard.writeText(text);alert("AI quote assist copied.");
+}
+function useAiCustomerReply(){
+  const structured=getAiStructured();
+  if(structured.customer_reply){setCustomerQuoteText(structured.customer_reply);latestQuoteText=structured.customer_reply;alert("Structured customer reply copied into Customer Reply Draft.");return;}
+  const text=$("ai-quote-assist-box")?$("ai-quote-assist-box").textContent:"";
+  const marker="Suggested Customer Reply:";
+  const idx=text.indexOf(marker);
+  if(idx===-1){alert("No Suggested Customer Reply section found.");return;}
+  const after=text.slice(idx+marker.length).trim();
+  const internalIdx=after.indexOf("Internal Notes:");
+  const reply=(internalIdx>=0?after.slice(0,internalIdx):after).trim();
+  if(!reply){alert("Suggested reply was empty.");return;}
+  setCustomerQuoteText(reply);latestQuoteText=reply;alert("Suggested reply copied into Customer Reply Draft.");
+}
+function applyAiStructuredToCalculator(){
+  const data=getAiStructured();
+  let applied=[];
+  if(data.estimated_grams!==null&&data.estimated_grams!==undefined&&Number(data.estimated_grams)>0){$("grams").value=Number(data.estimated_grams);applied.push("grams");}
+  if(data.estimated_hours!==null&&data.estimated_hours!==undefined&&Number(data.estimated_hours)>0){$("hours").value=Number(data.estimated_hours);applied.push("hours");}
+  if(data.fail_rate!==null&&data.fail_rate!==undefined&&Number(data.fail_rate)>=0){$("fail_rate").value=Number(data.fail_rate);applied.push("fail rate");}
+  if(data.complexity_multiplier!==null&&data.complexity_multiplier!==undefined&&Number(data.complexity_multiplier)>0){$("complexity_multiplier").value=String(data.complexity_multiplier);applied.push("complexity");}
+  if(data.customer_reply){setCustomerQuoteText(data.customer_reply);latestQuoteText=data.customer_reply;applied.push("customer reply");}
+  if(!applied.length){alert("AI did not provide calculator-ready values.");return;}
+  alert("Applied AI values: "+applied.join(", "));
+}
 
 </script>
 </body>
