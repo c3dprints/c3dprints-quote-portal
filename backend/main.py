@@ -16,6 +16,7 @@ from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from openai import OpenAI
 
 from ai_triage import ai_triage_summary
 from auth import check_admin_credentials, create_admin_token, verify_admin
@@ -29,6 +30,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
+AI_QUOTE_MODEL = os.getenv("AI_QUOTE_MODEL", "gpt-4o-mini")
 
 VALID_STATUSES = {
     "New",
@@ -279,7 +281,10 @@ def init_db():
                     profit_notes TEXT,
                     quoted_price NUMERIC,
                     quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ
+                    quote_sent_at TIMESTAMPTZ,
+                    ai_quote_assist TEXT,
+                    ai_quote_assist_at TIMESTAMPTZ,
+                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
                 );
                 """
             )
@@ -304,6 +309,9 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
 
 
 
@@ -360,6 +368,133 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
                 {"uploaded_files": Json(uploaded_files), "request_id": request_id},
             )
 
+
+
+
+
+def extract_ai_quote_structured(text: str) -> dict:
+    if not text:
+        return {}
+    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
+    raw = match.group(1) if match else ""
+    if not raw:
+        match = re.search(r"(\{.*\})", text, re.DOTALL)
+        raw = match.group(1) if match else ""
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    allowed = {
+        "recommended_material", "complexity", "estimated_grams", "estimated_hours",
+        "complexity_multiplier", "fail_rate", "price_min", "price_max",
+        "risk_flags", "questions_for_customer", "customer_reply", "internal_notes",
+        "confidence",
+    }
+    return {key: parsed.get(key) for key in allowed if key in parsed}
+
+
+def build_ai_quote_assist_prompt(row: dict) -> str:
+    uploaded_files = row.get("uploaded_files") or []
+    file_names = []
+    stl_analyses = []
+    for file in uploaded_files:
+        if isinstance(file, dict):
+            file_names.append(file.get("original_filename") or file.get("filename") or "uploaded file")
+            if file.get("stl_analysis"):
+                stl_analyses.append(file.get("stl_analysis"))
+        else:
+            file_names.append(str(file))
+
+    return f"""
+You are helping C3D Prints, a small 3D printing business, review a customer quote request.
+
+Use STL analysis when available. Do not invent exact values when unknown. If STL analysis gives rough grams/hours, use them as rough estimates and clearly label them rough.
+
+Customer:
+- Name: {row.get("name")}
+- Email: {row.get("email")}
+
+Request:
+- Description: {row.get("project_description")}
+- Quantity: {row.get("quantity")}
+- Approx size: {row.get("approx_size")}
+- Deadline: {row.get("deadline")}
+- Material preference: {row.get("material_preference")}
+- Color preference: {row.get("color_preference")}
+- Use case: {row.get("use_case")}
+- Requirements: {row.get("requirements")}
+- Delivery method: {row.get("delivery_method")}
+- Shipping location: {row.get("shipping_location")}
+- Additional notes: {row.get("additional_notes")}
+- Uploaded files: {", ".join(file_names) if file_names else "None"}
+- STL analysis: {json.dumps(stl_analyses, indent=2) if stl_analyses else "None"}
+
+Return a readable shop-owner summary and then return valid JSON in this exact schema inside a fenced code block labeled json.
+Use null when unknown.
+
+AI QUOTE ASSIST
+
+Recommended Material:
+- ...
+
+Complexity:
+- Low / Medium / High
+- Why:
+
+Risks / Questions:
+- ...
+
+Suggested Pricing Inputs:
+- Estimated grams:
+- Estimated print hours:
+- Complexity multiplier suggestion:
+- Fail rate suggestion:
+
+Suggested Customer Reply:
+Hi [first name],
+...
+
+Internal Notes:
+- ...
+
+```json
+{{
+  "recommended_material": null,
+  "complexity": "Low|Medium|High|Unknown",
+  "estimated_grams": null,
+  "estimated_hours": null,
+  "complexity_multiplier": null,
+  "fail_rate": 30,
+  "price_min": null,
+  "price_max": null,
+  "risk_flags": [],
+  "questions_for_customer": [],
+  "customer_reply": null,
+  "internal_notes": null,
+  "confidence": "Low|Medium|High"
+}}
+```
+""".strip()
+
+
+def generate_ai_quote_assist(row: dict) -> str:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured in Render")
+    client = OpenAI(api_key=api_key)
+    response = client.chat.completions.create(
+        model=AI_QUOTE_MODEL,
+        messages=[
+            {"role": "system", "content": "You are a practical 3D print shop quoting assistant. Be concise, careful, and do not invent exact measurements or prices without enough evidence."},
+            {"role": "user", "content": build_ai_quote_assist_prompt(row)},
+        ],
+        temperature=0.3,
+    )
+    return response.choices[0].message.content.strip()
 
 
 
@@ -614,6 +749,9 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -685,6 +823,9 @@ def update_request_status(
                     quoted_price,
                     quote_message,
                     quote_sent_at,
+                    ai_quote_assist,
+                    ai_quote_assist_at,
+                    ai_quote_structured,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -761,6 +902,9 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
+                        ai_quote_structured,
                         status;
                     """,
                     {
@@ -813,6 +957,9 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
+                        ai_quote_assist,
+                        ai_quote_assist_at,
+                        ai_quote_structured,
                         status;
                     """,
                     {
@@ -905,7 +1052,67 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
-                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, status;
+                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
+
+
+@app.post("/admin/requests/{request_id}/ai-quote-assist")
+def create_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, final_price,
+                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
+                    quoted_price, quote_message, quote_sent_at,
+                    ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            assist = generate_ai_quote_assist(row)
+            structured = extract_ai_quote_structured(assist)
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET ai_quote_assist = %(ai_quote_assist)s,
+                    ai_quote_assist_at = %(ai_quote_assist_at)s,
+                    ai_quote_structured = %(ai_quote_structured)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, final_price,
+                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
+                    quoted_price, quote_message, quote_sent_at,
+                    ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
+                """,
+                {
+                    "request_id": request_id,
+                    "ai_quote_assist": assist,
+                    "ai_quote_assist_at": datetime.now(timezone.utc),
+                    "ai_quote_structured": Json(structured),
+                },
+            )
+            updated = cur.fetchone()
+
+    return {
+        "success": True,
+        "request": updated,
+        "ai_quote_assist": assist,
+        "ai_quote_structured": structured,
+    }
+
