@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import secrets
 import struct
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -15,8 +16,8 @@ from psycopg.types.json import Json
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
-from openai import OpenAI
 
 from ai_triage import ai_triage_summary
 from auth import check_admin_credentials, create_admin_token, verify_admin
@@ -30,7 +31,7 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
-AI_QUOTE_MODEL = os.getenv("AI_QUOTE_MODEL", "gpt-4o-mini")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
 
 VALID_STATUSES = {
     "New",
@@ -282,9 +283,9 @@ def init_db():
                     quoted_price NUMERIC,
                     quote_message TEXT,
                     quote_sent_at TIMESTAMPTZ,
-                    ai_quote_assist TEXT,
-                    ai_quote_assist_at TIMESTAMPTZ,
-                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
+                    approval_token TEXT UNIQUE,
+                    approved_at TIMESTAMPTZ,
+                    approval_notes TEXT
                 );
                 """
             )
@@ -309,9 +310,9 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS approval_token TEXT UNIQUE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS approval_notes TEXT;")
 
 
 
@@ -372,130 +373,127 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
 
 
 
-def extract_ai_quote_structured(text: str) -> dict:
-    if not text:
-        return {}
-    match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL | re.IGNORECASE)
-    raw = match.group(1) if match else ""
-    if not raw:
-        match = re.search(r"(\{.*\})", text, re.DOTALL)
-        raw = match.group(1) if match else ""
-    if not raw:
-        return {}
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        return {}
-    if not isinstance(parsed, dict):
-        return {}
-    allowed = {
-        "recommended_material", "complexity", "estimated_grams", "estimated_hours",
-        "complexity_multiplier", "fail_rate", "price_min", "price_max",
-        "risk_flags", "questions_for_customer", "customer_reply", "internal_notes",
-        "confidence",
-    }
-    return {key: parsed.get(key) for key in allowed if key in parsed}
+def create_approval_token() -> str:
+    return secrets.token_urlsafe(32)
 
 
-def build_ai_quote_assist_prompt(row: dict) -> str:
-    uploaded_files = row.get("uploaded_files") or []
-    file_names = []
-    stl_analyses = []
-    for file in uploaded_files:
-        if isinstance(file, dict):
-            file_names.append(file.get("original_filename") or file.get("filename") or "uploaded file")
-            if file.get("stl_analysis"):
-                stl_analyses.append(file.get("stl_analysis"))
-        else:
-            file_names.append(str(file))
+def get_or_create_approval_token(request_id: int) -> str:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT approval_token FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            if row.get("approval_token"):
+                return row["approval_token"]
+
+            token = create_approval_token()
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET approval_token = %(approval_token)s
+                WHERE id = %(request_id)s
+                RETURNING approval_token;
+                """,
+                {"approval_token": token, "request_id": request_id},
+            )
+            return cur.fetchone()["approval_token"]
+
+
+def html_escape(value) -> str:
+    text = "" if value is None else str(value)
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#039;")
+
+
+def render_customer_quote_page(row: dict) -> str:
+    price = row.get("quoted_price") or row.get("final_price")
+    price_text = f"${float(price):.2f}" if price is not None else "Price not listed"
+    approved = bool(row.get("approved_at")) or row.get("status") == "Approved"
+    quote_message = row.get("quote_message") or "No quote message was saved for this request."
+
+    approval_status = (
+        "<div class='approved'>This quote has already been approved.</div>"
+        if approved
+        else "<button id='approveBtn' onclick='approveQuote()'>Approve Quote</button>"
+    )
 
     return f"""
-You are helping C3D Prints, a small 3D printing business, review a customer quote request.
-
-Use STL analysis when available. Do not invent exact values when unknown. If STL analysis gives rough grams/hours, use them as rough estimates and clearly label them rough.
-
-Customer:
-- Name: {row.get("name")}
-- Email: {row.get("email")}
-
-Request:
-- Description: {row.get("project_description")}
-- Quantity: {row.get("quantity")}
-- Approx size: {row.get("approx_size")}
-- Deadline: {row.get("deadline")}
-- Material preference: {row.get("material_preference")}
-- Color preference: {row.get("color_preference")}
-- Use case: {row.get("use_case")}
-- Requirements: {row.get("requirements")}
-- Delivery method: {row.get("delivery_method")}
-- Shipping location: {row.get("shipping_location")}
-- Additional notes: {row.get("additional_notes")}
-- Uploaded files: {", ".join(file_names) if file_names else "None"}
-- STL analysis: {json.dumps(stl_analyses, indent=2) if stl_analyses else "None"}
-
-Return a readable shop-owner summary and then return valid JSON in this exact schema inside a fenced code block labeled json.
-Use null when unknown.
-
-AI QUOTE ASSIST
-
-Recommended Material:
-- ...
-
-Complexity:
-- Low / Medium / High
-- Why:
-
-Risks / Questions:
-- ...
-
-Suggested Pricing Inputs:
-- Estimated grams:
-- Estimated print hours:
-- Complexity multiplier suggestion:
-- Fail rate suggestion:
-
-Suggested Customer Reply:
-Hi [first name],
-...
-
-Internal Notes:
-- ...
-
-```json
-{{
-  "recommended_material": null,
-  "complexity": "Low|Medium|High|Unknown",
-  "estimated_grams": null,
-  "estimated_hours": null,
-  "complexity_multiplier": null,
-  "fail_rate": 30,
-  "price_min": null,
-  "price_max": null,
-  "risk_flags": [],
-  "questions_for_customer": [],
-  "customer_reply": null,
-  "internal_notes": null,
-  "confidence": "Low|Medium|High"
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>C3D Prints Quote #{html_escape(row.get("id"))}</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+:root {{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#33ccff;--orange:#ff8c3a;--green:#00e890;--text:#ddeeff;--muted:#8aa8c5;--red:#ff3d5a;}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif;padding:24px}}
+.wrap{{max-width:760px;margin:0 auto}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;margin-bottom:16px}}
+h1{{color:var(--blue);margin:0 0 8px}}
+p{{line-height:1.5;color:var(--muted)}}
+.price{{font-size:34px;font-weight:bold;color:var(--green);margin:14px 0}}
+.detail-grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}
+.detail{{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px}}
+.detail label{{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}}
+.detail strong{{color:var(--text)}}
+.quote{{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:16px;white-space:pre-wrap;line-height:1.5}}
+button{{width:100%;background:linear-gradient(135deg,#008f5f,#00e890);color:#06140d;border:none;border-radius:14px;padding:16px;font-size:17px;font-weight:bold;cursor:pointer}}
+button:disabled{{opacity:.6;cursor:wait}}
+.approved,.success{{background:rgba(0,232,144,.12);border:1px solid rgba(0,232,144,.35);color:var(--green);border-radius:12px;padding:14px;text-align:center;font-weight:bold}}
+.success{{display:none;margin-top:12px}}
+.error{{background:rgba(255,61,90,.12);border:1px solid rgba(255,61,90,.35);color:var(--red);border-radius:12px;padding:14px;margin-top:12px;display:none}}
+small{{color:var(--muted)}}
+@media(max-width:640px){{.detail-grid{{grid-template-columns:1fr}}body{{padding:14px}}}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="card">
+    <h1>C3D Prints Quote #{html_escape(row.get("id"))}</h1>
+    <p>Please review your custom quote below. Approving this quote lets C3D Prints know you’re ready to move forward. Payment will still be handled separately through Shopify or Etsy.</p>
+    <div class="price">{html_escape(price_text)}</div>
+    <div class="detail-grid">
+      <div class="detail"><label>Customer</label><strong>{html_escape(row.get("name"))}</strong></div>
+      <div class="detail"><label>Status</label><strong>{html_escape(row.get("status"))}</strong></div>
+      <div class="detail"><label>Quantity</label><strong>{html_escape(row.get("quantity"))}</strong></div>
+      <div class="detail"><label>Material</label><strong>{html_escape(row.get("material_preference") or "Not specified")}</strong></div>
+    </div>
+  </div>
+  <div class="card">
+    <h2 style="color:var(--orange);margin-top:0;">Quote Details</h2>
+    <div class="quote">{html_escape(quote_message)}</div>
+  </div>
+  <div class="card">
+    {approval_status}
+    <div id="success" class="success">Thank you — your quote has been approved. C3D Prints will follow up with your Shopify/Etsy checkout link.</div>
+    <div id="error" class="error">Something went wrong. Please contact C3D Prints directly.</div>
+    <p><small>Approving this quote does not process payment. Payment will be completed separately.</small></p>
+  </div>
+</div>
+<script>
+async function approveQuote(){{
+  const btn=document.getElementById("approveBtn");
+  const success=document.getElementById("success");
+  const error=document.getElementById("error");
+  if(btn){{btn.disabled=true;btn.textContent="Approving...";}}
+  success.style.display="none"; error.style.display="none";
+  try{{
+    const response=await fetch(window.location.pathname+"/approve",{{method:"POST"}});
+    if(!response.ok)throw new Error("Approval failed");
+    success.style.display="block";
+    if(btn){{btn.textContent="Approved";}}
+  }}catch(e){{
+    error.style.display="block";
+    if(btn){{btn.disabled=false;btn.textContent="Approve Quote";}}
+  }}
 }}
-```
-""".strip()
-
-
-def generate_ai_quote_assist(row: dict) -> str:
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured in Render")
-    client = OpenAI(api_key=api_key)
-    response = client.chat.completions.create(
-        model=AI_QUOTE_MODEL,
-        messages=[
-            {"role": "system", "content": "You are a practical 3D print shop quoting assistant. Be concise, careful, and do not invent exact measurements or prices without enough evidence."},
-            {"role": "user", "content": build_ai_quote_assist_prompt(row)},
-        ],
-        temperature=0.3,
-    )
-    return response.choices[0].message.content.strip()
-
+</script>
+</body>
+</html>
+"""
 
 
 @app.on_event("startup")
@@ -749,9 +747,9 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
+                    approval_token,
+                    approved_at,
+                    approval_notes,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -823,9 +821,9 @@ def update_request_status(
                     quoted_price,
                     quote_message,
                     quote_sent_at,
-                    ai_quote_assist,
-                    ai_quote_assist_at,
-                    ai_quote_structured,
+                    approval_token,
+                    approved_at,
+                    approval_notes,
                     status;
                 """,
                 {"status": status, "request_id": request_id},
@@ -902,9 +900,9 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
-                        ai_quote_assist,
-                        ai_quote_assist_at,
-                        ai_quote_structured,
+                        approval_token,
+                        approved_at,
+                        approval_notes,
                         status;
                     """,
                     {
@@ -957,9 +955,9 @@ def update_job_details(
                         quoted_price,
                         quote_message,
                         quote_sent_at,
-                        ai_quote_assist,
-                        ai_quote_assist_at,
-                        ai_quote_structured,
+                        approval_token,
+                        approved_at,
+                        approval_notes,
                         status;
                     """,
                     {
@@ -1041,8 +1039,11 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
             quote_request = cur.fetchone()
             if not quote_request:
                 raise HTTPException(status_code=404, detail="Quote request not found")
-            html_body = f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre></div>"""
-            email_result = send_quote_notification(to_email=quote_request["email"], subject=subject, html_body=html_body, text_body=message)
+            approval_token = get_or_create_approval_token(request_id)
+            approval_link = f"{PUBLIC_BASE_URL}/quote/{approval_token}"
+            message_with_link = f"{message}\n\nReview and approve your quote here:\n{approval_link}\n\nPayment will be completed separately through Shopify or Etsy."
+            html_body = f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{html_escape(message)}</pre><p><a href="{approval_link}" style="display:inline-block;background:#00aaff;color:white;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:bold;">Review and Approve Quote</a></p><p>Payment will be completed separately through Shopify or Etsy.</p></div>"""
+            email_result = send_quote_notification(to_email=quote_request["email"], subject=subject, html_body=html_body, text_body=message_with_link)
             if not email_result.get("sent"):
                 raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
             cur.execute("""
@@ -1052,67 +1053,48 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
-                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
+                    actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, approval_token, approved_at, approval_notes, status;
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
 
 
-@app.post("/admin/requests/{request_id}/ai-quote-assist")
-def create_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+@app.get("/quote/{approval_token}", response_class=HTMLResponse)
+def public_quote_review(approval_token: str):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    id, created_at, name, email, phone, project_description, quantity,
-                    approx_size, deadline, material_preference, color_preference,
-                    use_case, requirements, delivery_method, shipping_location,
-                    additional_notes, uploaded_files, ai_summary, final_price,
-                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
-                    quoted_price, quote_message, quote_sent_at,
-                    ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status
+                SELECT id, name, email, quantity, material_preference, project_description,
+                       quoted_price, final_price, quote_message, status, approved_at, approval_notes
                 FROM quote_requests
-                WHERE id = %(request_id)s;
+                WHERE approval_token = %(approval_token)s;
                 """,
-                {"request_id": request_id},
+                {"approval_token": approval_token},
             )
             row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Quote request not found")
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return HTMLResponse(render_customer_quote_page(row))
 
-            assist = generate_ai_quote_assist(row)
-            structured = extract_ai_quote_structured(assist)
 
+@app.post("/quote/{approval_token}/approve")
+def public_quote_approve(approval_token: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
             cur.execute(
                 """
                 UPDATE quote_requests
-                SET ai_quote_assist = %(ai_quote_assist)s,
-                    ai_quote_assist_at = %(ai_quote_assist_at)s,
-                    ai_quote_structured = %(ai_quote_structured)s
-                WHERE id = %(request_id)s
-                RETURNING
-                    id, created_at, name, email, phone, project_description, quantity,
-                    approx_size, deadline, material_preference, color_preference,
-                    use_case, requirements, delivery_method, shipping_location,
-                    additional_notes, uploaded_files, ai_summary, final_price,
-                    deposit_paid, due_date, print_notes, actual_cost, profit_notes,
-                    quoted_price, quote_message, quote_sent_at,
-                    ai_quote_assist, ai_quote_assist_at, ai_quote_structured, status;
+                SET status = 'Approved',
+                    approved_at = COALESCE(approved_at, %(approved_at)s),
+                    approval_notes = COALESCE(approval_notes, 'Customer approved quote through approval portal.')
+                WHERE approval_token = %(approval_token)s
+                RETURNING id, status, approved_at;
                 """,
-                {
-                    "request_id": request_id,
-                    "ai_quote_assist": assist,
-                    "ai_quote_assist_at": datetime.now(timezone.utc),
-                    "ai_quote_structured": Json(structured),
-                },
+                {"approval_token": approval_token, "approved_at": datetime.now(timezone.utc)},
             )
-            updated = cur.fetchone()
-
-    return {
-        "success": True,
-        "request": updated,
-        "ai_quote_assist": assist,
-        "ai_quote_structured": structured,
-    }
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote not found")
+    return {"success": True, "request_id": row["id"], "status": row["status"], "approved_at": row["approved_at"]}
 

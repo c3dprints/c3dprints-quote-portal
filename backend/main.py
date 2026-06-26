@@ -32,6 +32,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
+APPROVAL_NOTIFY_EMAIL = os.getenv("APPROVAL_NOTIFY_EMAIL", os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com"))
 
 VALID_STATUSES = {
     "New",
@@ -1048,13 +1049,13 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
             cur.execute("""
                 UPDATE quote_requests
-                SET status = 'Quoted', quoted_price = %(quoted_price)s, quote_message = %(quote_message)s, quote_sent_at = %(quote_sent_at)s
+                SET status = 'Quoted', quoted_price = %(quoted_price)s, quote_message = %(quote_message)s, quote_sent_at = %(quote_sent_at)s, approval_token = %(approval_token)s
                 WHERE id = %(request_id)s
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
                     actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, approval_token, approved_at, approval_notes, status;
-            """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
+            """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc), "approval_token": approval_token})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
 
@@ -1089,12 +1090,74 @@ def public_quote_approve(approval_token: str):
                     approved_at = COALESCE(approved_at, %(approved_at)s),
                     approval_notes = COALESCE(approval_notes, 'Customer approved quote through approval portal.')
                 WHERE approval_token = %(approval_token)s
-                RETURNING id, status, approved_at;
+                RETURNING id, name, email, phone, project_description, quantity,
+                          material_preference, quoted_price, final_price,
+                          quote_message, status, approved_at;
                 """,
                 {"approval_token": approval_token, "approved_at": datetime.now(timezone.utc)},
             )
             row = cur.fetchone()
+
     if not row:
         raise HTTPException(status_code=404, detail="Quote not found")
-    return {"success": True, "request_id": row["id"], "status": row["status"], "approved_at": row["approved_at"]}
+
+    price = row.get("quoted_price") or row.get("final_price")
+    price_text = f"${float(price):.2f}" if price is not None else "No price listed"
+    admin_url = f"{PUBLIC_BASE_URL}/admin.html"
+
+    html_body = f"""
+    <h2>C3D Quote Approved</h2>
+    <p><strong>Quote:</strong> #{row.get("id")}</p>
+    <p><strong>Customer:</strong> {html_escape(row.get("name"))} &lt;{html_escape(row.get("email"))}&gt;</p>
+    <p><strong>Phone:</strong> {html_escape(row.get("phone") or "Not provided")}</p>
+    <p><strong>Price:</strong> {html_escape(price_text)}</p>
+    <p><strong>Quantity:</strong> {html_escape(row.get("quantity"))}</p>
+    <p><strong>Material:</strong> {html_escape(row.get("material_preference") or "Not specified")}</p>
+    <p><strong>Status:</strong> Approved</p>
+    <p><strong>Approved At:</strong> {html_escape(row.get("approved_at"))}</p>
+    <h3>Project Description</h3>
+    <p>{html_escape(row.get("project_description"))}</p>
+    <h3>Next Step</h3>
+    <p>Send the customer their Shopify or Etsy checkout link.</p>
+    <p><a href="{admin_url}">Open C3D Admin Dashboard</a></p>
+    """
+
+    text_body = f"""C3D Quote Approved
+
+Quote: #{row.get("id")}
+Customer: {row.get("name")} <{row.get("email")}>
+Phone: {row.get("phone") or "Not provided"}
+Price: {price_text}
+Quantity: {row.get("quantity")}
+Material: {row.get("material_preference") or "Not specified"}
+Status: Approved
+Approved At: {row.get("approved_at")}
+
+Project:
+{row.get("project_description")}
+
+Next step:
+Send the customer their Shopify or Etsy checkout link.
+
+Admin:
+{admin_url}
+"""
+
+    try:
+        email_result = send_quote_notification(
+            to_email=APPROVAL_NOTIFY_EMAIL,
+            subject=f"C3D Quote #{row.get('id')} Approved — {row.get('name')}",
+            html_body=html_body,
+            text_body=text_body,
+        )
+    except Exception as exc:
+        email_result = {"sent": False, "reason": str(exc)}
+
+    return {
+        "success": True,
+        "request_id": row["id"],
+        "status": row["status"],
+        "approved_at": row["approved_at"],
+        "notification": email_result,
+    }
 
