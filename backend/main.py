@@ -38,8 +38,6 @@ VALID_STATUSES = {
     "Need Info",
     "Quoted",
     "Approved",
-    "Awaiting Payment",
-    "Paid",
     "Printing",
     "Completed",
     "Archived",
@@ -284,12 +282,7 @@ def init_db():
                     profit_notes TEXT,
                     quoted_price NUMERIC,
                     quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ,
-                    checkout_platform TEXT,
-                    checkout_url TEXT,
-                    checkout_sent_at TIMESTAMPTZ,
-                    paid BOOLEAN NOT NULL DEFAULT FALSE,
-                    paid_at TIMESTAMPTZ
+                    quote_sent_at TIMESTAMPTZ
                 );
                 """
             )
@@ -314,11 +307,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_platform TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_url TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
 
 
 
@@ -927,19 +915,11 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
 
 
 class CheckoutLinkRequest(BaseModel):
-    platform: str
+    platform: str = "both"
 
 
 @app.post("/admin/requests/{request_id}/send-checkout")
 def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depends(verify_admin)):
-    platform = request.platform.strip().lower()
-
-    if platform not in {"etsy", "shopify"}:
-        raise HTTPException(status_code=400, detail="Platform must be Etsy or Shopify")
-
-    checkout_url = ETSY_CHECKOUT_URL if platform == "etsy" else SHOPIFY_CHECKOUT_URL
-    platform_label = "Etsy" if platform == "etsy" else "Shopify"
-
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -963,8 +943,13 @@ def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depe
 
 Thanks for approving your custom C3D Prints quote.
 
-You can complete checkout here:
-{checkout_url}
+You can complete checkout using either option below:
+
+Shop on C3DPRINTS.COM:
+{SHOPIFY_CHECKOUT_URL}
+
+Shop on Etsy:
+{ETSY_CHECKOUT_URL}
 
 Please use your approved quote amount: {price_text}
 
@@ -979,9 +964,15 @@ C3D Prints
               <p>Hi {html_escape(first_name)},</p>
               <p>Thanks for approving your custom C3D Prints quote.</p>
               <p><strong>Approved quote amount:</strong> {html_escape(price_text)}</p>
+              <p>You can complete checkout using either option below:</p>
               <p>
-                <a href="{checkout_url}" style="display:inline-block;background:#00aaff;color:white;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:bold;">
-                  Complete Checkout on {platform_label}
+                <a href="{SHOPIFY_CHECKOUT_URL}" style="display:inline-block;background:#007bff;color:white;padding:13px 18px;border-radius:8px;text-decoration:none;font-weight:bold;margin:6px 8px 6px 0;">
+                  Shop on C3DPRINTS.COM
+                </a>
+              </p>
+              <p>
+                <a href="{ETSY_CHECKOUT_URL}" style="display:inline-block;background:#f1641e;color:white;padding:13px 18px;border-radius:8px;text-decoration:none;font-weight:bold;margin:6px 8px 6px 0;">
+                  Shop on Etsy
                 </a>
               </p>
               <p>Once checkout is completed, your order will move into the print queue.</p>
@@ -991,7 +982,7 @@ C3D Prints
 
             email_result = send_quote_notification(
                 to_email=row["email"],
-                subject=f"C3D Prints Checkout Link — Quote #{row.get('id')}",
+                subject=f"C3D Prints Checkout Links — Quote #{row.get('id')}",
                 html_body=html_body,
                 text_body=text_body,
             )
@@ -1012,59 +1003,12 @@ C3D Prints
                 """,
                 {
                     "request_id": request_id,
-                    "checkout_platform": platform_label,
-                    "checkout_url": checkout_url,
+                    "checkout_platform": "Both",
+                    "checkout_url": f"Shopify: {SHOPIFY_CHECKOUT_URL} | Etsy: {ETSY_CHECKOUT_URL}",
                     "checkout_sent_at": datetime.now(timezone.utc),
                 },
             )
             updated = cur.fetchone()
 
     return {"success": True, "email": email_result, "request": updated}
-
-
-class PaymentStatusRequest(BaseModel):
-    paid: bool = True
-
-
-@app.patch("/admin/requests/{request_id}/payment")
-def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=Depends(verify_admin)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
-                {"request_id": request_id},
-            )
-            existing = cur.fetchone()
-
-            if not existing:
-                raise HTTPException(status_code=404, detail="Quote request not found")
-
-            if request.paid:
-                cur.execute(
-                    """
-                    UPDATE quote_requests
-                    SET
-                        paid = TRUE,
-                        paid_at = COALESCE(paid_at, %(paid_at)s),
-                        status = 'Paid'
-                    WHERE id = %(request_id)s
-                    RETURNING *;
-                    """,
-                    {"request_id": request_id, "paid_at": datetime.now(timezone.utc)},
-                )
-            else:
-                cur.execute(
-                    """
-                    UPDATE quote_requests
-                    SET
-                        paid = FALSE,
-                        paid_at = NULL
-                    WHERE id = %(request_id)s
-                    RETURNING *;
-                    """,
-                    {"request_id": request_id},
-                )
-            updated = cur.fetchone()
-
-    return {"success": True, "request": updated}
 
