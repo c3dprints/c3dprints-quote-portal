@@ -30,12 +30,16 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
+ETSY_CHECKOUT_URL = os.getenv("ETSY_CHECKOUT_URL", "https://c3dprintsofficial.etsy.com/listing/1249586363")
+SHOPIFY_CHECKOUT_URL = os.getenv("SHOPIFY_CHECKOUT_URL", "https://c3dprints.com/products/custom-3d-printed-cosplay-personalized-character-art-fan-art")
 
 VALID_STATUSES = {
     "New",
     "Need Info",
     "Quoted",
     "Approved",
+    "Awaiting Payment",
+    "Paid",
     "Printing",
     "Completed",
     "Archived",
@@ -280,7 +284,12 @@ def init_db():
                     profit_notes TEXT,
                     quoted_price NUMERIC,
                     quote_message TEXT,
-                    quote_sent_at TIMESTAMPTZ
+                    quote_sent_at TIMESTAMPTZ,
+                    checkout_platform TEXT,
+                    checkout_url TEXT,
+                    checkout_sent_at TIMESTAMPTZ,
+                    paid BOOLEAN NOT NULL DEFAULT FALSE,
+                    paid_at TIMESTAMPTZ
                 );
                 """
             )
@@ -305,6 +314,11 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_platform TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_url TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
 
 
 
@@ -910,3 +924,147 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
+
+
+class CheckoutLinkRequest(BaseModel):
+    platform: str
+
+
+@app.post("/admin/requests/{request_id}/send-checkout")
+def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depends(verify_admin)):
+    platform = request.platform.strip().lower()
+
+    if platform not in {"etsy", "shopify"}:
+        raise HTTPException(status_code=400, detail="Platform must be Etsy or Shopify")
+
+    checkout_url = ETSY_CHECKOUT_URL if platform == "etsy" else SHOPIFY_CHECKOUT_URL
+    platform_label = "Etsy" if platform == "etsy" else "Shopify"
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, email, quoted_price, final_price, project_description
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            price = row.get("quoted_price") or row.get("final_price")
+            price_text = f"${float(price):.2f}" if price is not None else "your approved quote amount"
+            first_name = (row.get("name") or "there").split(" ")[0]
+
+            text_body = f"""Hi {first_name},
+
+Thanks for approving your custom C3D Prints quote.
+
+You can complete checkout here:
+{checkout_url}
+
+Please use your approved quote amount: {price_text}
+
+Once checkout is completed, your order will move into the print queue.
+
+Thank you,
+C3D Prints
+"""
+
+            html_body = f"""
+            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
+              <p>Hi {html_escape(first_name)},</p>
+              <p>Thanks for approving your custom C3D Prints quote.</p>
+              <p><strong>Approved quote amount:</strong> {html_escape(price_text)}</p>
+              <p>
+                <a href="{checkout_url}" style="display:inline-block;background:#00aaff;color:white;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:bold;">
+                  Complete Checkout on {platform_label}
+                </a>
+              </p>
+              <p>Once checkout is completed, your order will move into the print queue.</p>
+              <p>Thank you,<br>C3D Prints</p>
+            </div>
+            """
+
+            email_result = send_quote_notification(
+                to_email=row["email"],
+                subject=f"C3D Prints Checkout Link — Quote #{row.get('id')}",
+                html_body=html_body,
+                text_body=text_body,
+            )
+
+            if not email_result.get("sent"):
+                raise HTTPException(status_code=500, detail=f"Checkout email failed: {email_result.get('reason', 'Unknown error')}")
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET
+                    checkout_platform = %(checkout_platform)s,
+                    checkout_url = %(checkout_url)s,
+                    checkout_sent_at = %(checkout_sent_at)s,
+                    status = 'Awaiting Payment'
+                WHERE id = %(request_id)s
+                RETURNING *;
+                """,
+                {
+                    "request_id": request_id,
+                    "checkout_platform": platform_label,
+                    "checkout_url": checkout_url,
+                    "checkout_sent_at": datetime.now(timezone.utc),
+                },
+            )
+            updated = cur.fetchone()
+
+    return {"success": True, "email": email_result, "request": updated}
+
+
+class PaymentStatusRequest(BaseModel):
+    paid: bool = True
+
+
+@app.patch("/admin/requests/{request_id}/payment")
+def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                {"request_id": request_id},
+            )
+            existing = cur.fetchone()
+
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            if request.paid:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        paid = TRUE,
+                        paid_at = COALESCE(paid_at, %(paid_at)s),
+                        status = 'Paid'
+                    WHERE id = %(request_id)s
+                    RETURNING *;
+                    """,
+                    {"request_id": request_id, "paid_at": datetime.now(timezone.utc)},
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        paid = FALSE,
+                        paid_at = NULL
+                    WHERE id = %(request_id)s
+                    RETURNING *;
+                    """,
+                    {"request_id": request_id},
+                )
+            updated = cur.fetchone()
+
+    return {"success": True, "request": updated}
+
