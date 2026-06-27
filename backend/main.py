@@ -21,6 +21,7 @@ from ai_triage import ai_triage_summary
 from auth import check_admin_credentials, create_admin_token, verify_admin
 from email_service import send_quote_notification
 from pricing_engine import PricingSettings, calculate_quote
+from html import escape as html_escape
 
 load_dotenv()
 
