@@ -2,7 +2,6 @@ import json
 import math
 import os
 import re
-from html import escape as html_escape
 import struct
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -30,14 +29,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
-ETSY_CHECKOUT_URL = os.getenv("ETSY_CHECKOUT_URL", "https://c3dprintsofficial.etsy.com/listing/1249586363")
-SHOPIFY_CHECKOUT_URL = os.getenv("SHOPIFY_CHECKOUT_URL", "https://c3dprints.com/products/custom-3d-printed-cosplay-personalized-character-art-fan-art")
 
 VALID_STATUSES = {
     "New",
     "Need Info",
     "Quoted",
     "Approved",
+    "Awaiting Payment",
+    "Paid",
     "Printing",
     "Completed",
     "Archived",
@@ -914,101 +913,30 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
     return {"success": True, "email": email_result, "request": updated}
 
 
-class CheckoutLinkRequest(BaseModel):
-    platform: str = "both"
-
-
-@app.post("/admin/requests/{request_id}/send-checkout")
-def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depends(verify_admin)):
+@app.on_event("startup")
+def ensure_quote_status_constraint():
+    if not database_enabled():
+        return
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, email, quoted_price, final_price, project_description
-                FROM quote_requests
-                WHERE id = %(request_id)s;
-                """,
-                {"request_id": request_id},
-            )
-            row = cur.fetchone()
-
-            if not row:
-                raise HTTPException(status_code=404, detail="Quote request not found")
-
-            price = row.get("quoted_price") or row.get("final_price")
-            price_text = f"${float(price):.2f}" if price is not None else "your approved quote amount"
-            first_name = (row.get("name") or "there").split(" ")[0]
-
-            text_body = f"""Hi {first_name},
-
-Thanks for approving your custom C3D Prints quote.
-
-You can complete checkout using either option below:
-
-Shop on C3DPRINTS.COM:
-{SHOPIFY_CHECKOUT_URL}
-
-Shop on Etsy:
-{ETSY_CHECKOUT_URL}
-
-Please use your approved quote amount: {price_text}
-
-Once checkout is completed, your order will move into the print queue.
-
-Thank you,
-C3D Prints
-"""
-
-            html_body = f"""
-            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
-              <p>Hi {html_escape(first_name)},</p>
-              <p>Thanks for approving your custom C3D Prints quote.</p>
-              <p><strong>Approved quote amount:</strong> {html_escape(price_text)}</p>
-              <p>You can complete checkout using either option below:</p>
-              <p>
-                <a href="{SHOPIFY_CHECKOUT_URL}" style="display:inline-block;background:#007bff;color:white;padding:13px 18px;border-radius:8px;text-decoration:none;font-weight:bold;margin:6px 8px 6px 0;">
-                  Shop on C3DPRINTS.COM
-                </a>
-              </p>
-              <p>
-                <a href="{ETSY_CHECKOUT_URL}" style="display:inline-block;background:#f1641e;color:white;padding:13px 18px;border-radius:8px;text-decoration:none;font-weight:bold;margin:6px 8px 6px 0;">
-                  Shop on Etsy
-                </a>
-              </p>
-              <p>Once checkout is completed, your order will move into the print queue.</p>
-              <p>Thank you,<br>C3D Prints</p>
-            </div>
-            """
-
-            email_result = send_quote_notification(
-                to_email=row["email"],
-                subject=f"C3D Prints Checkout Links — Quote #{row.get('id')}",
-                html_body=html_body,
-                text_body=text_body,
-            )
-
-            if not email_result.get("sent"):
-                raise HTTPException(status_code=500, detail=f"Checkout email failed: {email_result.get('reason', 'Unknown error')}")
-
-            cur.execute(
-                """
-                UPDATE quote_requests
-                SET
-                    checkout_platform = %(checkout_platform)s,
-                    checkout_url = %(checkout_url)s,
-                    checkout_sent_at = %(checkout_sent_at)s,
-                    status = 'Awaiting Payment'
-                WHERE id = %(request_id)s
-                RETURNING *;
-                """,
-                {
-                    "request_id": request_id,
-                    "checkout_platform": "Both",
-                    "checkout_url": f"Shopify: {SHOPIFY_CHECKOUT_URL} | Etsy: {ETSY_CHECKOUT_URL}",
-                    "checkout_sent_at": datetime.now(timezone.utc),
-                },
-            )
-            updated = cur.fetchone()
-
-    return {"success": True, "email": email_result, "request": updated}
+            cur.execute("""
+                ALTER TABLE quote_requests
+                DROP CONSTRAINT IF EXISTS quote_requests_status_check;
+            """)
+            cur.execute("""
+                ALTER TABLE quote_requests
+                ADD CONSTRAINT quote_requests_status_check
+                CHECK (status IN (
+                    'New',
+                    'Reviewing',
+                    'Need Info',
+                    'Quoted',
+                    'Approved',
+                    'Awaiting Payment',
+                    'Paid',
+                    'Printing',
+                    'Completed',
+                    'Archived'
+                ));
+            """)
 
