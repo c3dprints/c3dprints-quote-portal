@@ -35,8 +35,6 @@ VALID_STATUSES = {
     "Need Info",
     "Quoted",
     "Approved",
-    "Awaiting Payment",
-    "Paid",
     "Printing",
     "Completed",
     "Archived",
@@ -911,32 +909,3 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
             """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
-
-
-@app.on_event("startup")
-def ensure_quote_status_constraint():
-    if not database_enabled():
-        return
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                ALTER TABLE quote_requests
-                DROP CONSTRAINT IF EXISTS quote_requests_status_check;
-            """)
-            cur.execute("""
-                ALTER TABLE quote_requests
-                ADD CONSTRAINT quote_requests_status_check
-                CHECK (status IN (
-                    'New',
-                    'Reviewing',
-                    'Need Info',
-                    'Quoted',
-                    'Approved',
-                    'Awaiting Payment',
-                    'Paid',
-                    'Printing',
-                    'Completed',
-                    'Archived'
-                ));
-            """)
-
