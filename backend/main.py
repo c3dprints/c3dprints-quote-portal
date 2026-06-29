@@ -18,7 +18,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -431,6 +431,11 @@ def init_db():
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
             """)
+            cur.execute("ALTER TABLE printers ADD COLUMN IF NOT EXISTS serial TEXT;")
+            cur.execute("ALTER TABLE printers ADD COLUMN IF NOT EXISTS live_state TEXT;")
+            cur.execute("ALTER TABLE printers ADD COLUMN IF NOT EXISTS progress INTEGER;")
+            cur.execute("ALTER TABLE printers ADD COLUMN IF NOT EXISTS remaining_min INTEGER;")
+            cur.execute("ALTER TABLE printers ADD COLUMN IF NOT EXISTS last_report_at TIMESTAMPTZ;")
 
 
 
@@ -1846,6 +1851,51 @@ def duplicate_request(request_id: int, admin=Depends(verify_admin)):
     return {"success": True, "new_request_id": new_id, "duplicated_from": request_id}
 
 
+class AdminCreateRequest(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    project_description: Optional[str] = ""
+    quantity: int = 1
+    approx_size: Optional[str] = None
+    deadline: Optional[str] = None
+    material_preference: Optional[str] = None
+    color_preference: Optional[str] = None
+    use_case: Optional[str] = None
+    requirements: Optional[List[str]] = None
+    delivery_method: Optional[str] = None
+    shipping_location: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+
+@app.post("/admin/requests")
+def admin_create_request(req: AdminCreateRequest, admin=Depends(verify_admin)):
+    """Create a request from scratch (e.g. a customer who can't use the public form).
+    Shares the customer's email, so it appears in their portal like any other."""
+    name = (req.name or "").strip()
+    email = (req.email or "").strip()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="Name and email are required")
+    data = {
+        "name": name,
+        "email": email,
+        "phone": req.phone,
+        "project_description": (req.project_description or "").strip(),
+        "quantity": max(1, int(req.quantity or 1)),
+        "approx_size": req.approx_size,
+        "deadline": req.deadline,
+        "material_preference": req.material_preference,
+        "color_preference": req.color_preference,
+        "use_case": req.use_case,
+        "requirements": req.requirements or [],
+        "delivery_method": req.delivery_method,
+        "shipping_location": req.shipping_location,
+        "additional_notes": req.additional_notes,
+    }
+    new_id = save_request(data, "")
+    return {"success": True, "new_request_id": new_id}
+
+
 @app.post("/admin/requests/{request_id}/files")
 def admin_upload_files(
     request_id: int,
@@ -1906,16 +1956,32 @@ PRODUCTION_STATUSES = ["Approved", "Awaiting Payment", "Paid", "Printing"]
 class PrinterCreate(BaseModel):
     name: str
     notes: Optional[str] = None
+    serial: Optional[str] = None
 
 
 class PrinterUpdate(BaseModel):
     name: Optional[str] = None
     status: Optional[str] = None
     notes: Optional[str] = None
+    serial: Optional[str] = None
 
 
 class AssignPrinterRequest(BaseModel):
     printer_id: Optional[int] = None
+
+
+class PrinterReport(BaseModel):
+    serial: str
+    state: Optional[str] = None        # raw Bambu gcode_state (RUNNING/IDLE/PAUSE/FINISH/FAILED/PREPARE)
+    progress: Optional[int] = None     # 0-100
+    remaining_min: Optional[int] = None
+
+
+# Map raw Bambu gcode_state -> our printer status column.
+BAMBU_STATE_TO_STATUS = {
+    "RUNNING": "Printing", "PREPARE": "Printing", "PAUSE": "Printing",
+    "FINISH": "Available", "IDLE": "Available", "FAILED": "Offline",
+}
 
 
 @app.post("/admin/printers")
@@ -1926,8 +1992,8 @@ def add_printer(req: PrinterCreate, admin=Depends(verify_admin)):
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO printers (name, notes) VALUES (%(n)s, %(o)s) RETURNING id, name, status, notes;",
-                {"n": name, "o": req.notes},
+                "INSERT INTO printers (name, notes, serial) VALUES (%(n)s, %(o)s, %(s)s) RETURNING id, name, status, notes, serial;",
+                {"n": name, "o": req.notes, "s": (req.serial or "").strip() or None},
             )
             return {"success": True, "printer": cur.fetchone()}
 
@@ -1944,18 +2010,45 @@ def update_printer(printer_id: int, req: PrinterUpdate, admin=Depends(verify_adm
         fields.append("status = %(status)s"); params["status"] = req.status
     if req.notes is not None:
         fields.append("notes = %(notes)s"); params["notes"] = req.notes
+    if req.serial is not None:
+        fields.append("serial = %(serial)s"); params["serial"] = req.serial.strip() or None
     if not fields:
         raise HTTPException(status_code=400, detail="Nothing to update")
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                f"UPDATE printers SET {', '.join(fields)} WHERE id = %(id)s RETURNING id, name, status, notes;",
+                f"UPDATE printers SET {', '.join(fields)} WHERE id = %(id)s RETURNING id, name, status, notes, serial;",
                 params,
             )
             row = cur.fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Printer not found")
     return {"success": True, "printer": row}
+
+
+@app.post("/agent/printer-report")
+def printer_report(report: PrinterReport, x_agent_key: str = Header(None)):
+    """Ingest live status from the on-prem Bambu bridge agent. Auth via a shared
+    X-Agent-Key header (PRINTER_AGENT_KEY). Maps the report to a printer by serial."""
+    expected = os.getenv("PRINTER_AGENT_KEY")
+    if not expected or not x_agent_key or not hmac.compare_digest(x_agent_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing agent key")
+    serial = (report.serial or "").strip()
+    if not serial:
+        raise HTTPException(status_code=400, detail="serial is required")
+    status = BAMBU_STATE_TO_STATUS.get((report.state or "").upper())
+    sets = ["live_state = %(ls)s", "progress = %(pg)s", "remaining_min = %(rm)s", "last_report_at = %(ts)s"]
+    params = {"ls": report.state, "pg": report.progress, "rm": report.remaining_min,
+              "ts": datetime.now(timezone.utc), "serial": serial}
+    if status:
+        sets.append("status = %(status)s"); params["status"] = status
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE printers SET {', '.join(sets)} WHERE serial = %(serial)s RETURNING id;", params)
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail=f"No printer registered with serial {serial}")
+    return {"success": True, "printer_id": row["id"]}
 
 
 @app.delete("/admin/printers/{printer_id}")
@@ -1999,7 +2092,7 @@ def _job_est_hours(row: dict) -> Optional[float]:
 def production_queue(admin=Depends(verify_admin)):
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, status, notes FROM printers ORDER BY id;")
+            cur.execute("SELECT id, name, status, notes, serial, live_state, progress, remaining_min, last_report_at FROM printers ORDER BY id;")
             printers = cur.fetchall()
             cur.execute(
                 """
