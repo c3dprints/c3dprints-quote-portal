@@ -1834,3 +1834,54 @@ def duplicate_request(request_id: int, admin=Depends(verify_admin)):
     }
     new_id = save_request(data, "")
     return {"success": True, "new_request_id": new_id, "duplicated_from": request_id}
+
+
+@app.post("/admin/requests/{request_id}/files")
+def admin_upload_files(
+    request_id: int,
+    files: List[UploadFile] = File(...),
+    admin=Depends(verify_admin),
+):
+    """Attach files to an existing request from the admin dashboard. Mirrors the
+    public intake's storage + geometry-analysis handling and appends to any
+    existing uploaded files (does not replace them)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, material_preference, uploaded_files FROM quote_requests WHERE id = %(id)s;",
+                {"id": request_id},
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+
+    material = row.get("material_preference")
+    existing = list(row.get("uploaded_files") or [])
+    new_files = []
+    for file in files:
+        if not file.filename:
+            continue
+        raw_for_analysis = file.file.read()
+        try:
+            file.file.seek(0)
+        except Exception:
+            pass
+        stl_analysis = analyze_model_bytes(raw_for_analysis, file.filename, material)
+        if storage_enabled():
+            stored = upload_file_to_supabase_storage(request_id, file)
+            if stored:
+                if stl_analysis:
+                    stored["stl_analysis"] = stl_analysis
+                new_files.append(stored)
+        else:
+            metadata = {"filename": file.filename, "original_filename": file.filename, "storage_path": None}
+            if stl_analysis:
+                metadata["stl_analysis"] = stl_analysis
+            new_files.append(metadata)
+
+    if not new_files:
+        raise HTTPException(status_code=400, detail="No valid files were uploaded.")
+
+    combined = existing + new_files
+    update_request_files(request_id, combined)
+    return {"success": True, "uploaded_files": combined, "added": len(new_files)}
