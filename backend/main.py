@@ -1791,3 +1791,46 @@ def delete_request(request_id: int, admin=Depends(verify_admin)):
     if not row:
         raise HTTPException(status_code=404, detail="Quote request not found")
     return {"success": True, "deleted_id": row["id"]}
+
+
+@app.post("/admin/requests/{request_id}/duplicate")
+def duplicate_request(request_id: int, admin=Depends(verify_admin)):
+    """Create a new request copying the source's contact + project details.
+
+    The new request shares the customer's email, so it automatically appears in
+    their portal alongside their other projects. Pricing/quote/payment state,
+    tokens, AI output, and uploaded files are NOT copied (it's a fresh project).
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name, email, phone, project_description, quantity, approx_size,
+                       deadline, material_preference, color_preference, use_case,
+                       requirements, delivery_method, shipping_location, additional_notes
+                FROM quote_requests WHERE id = %(id)s;
+                """,
+                {"id": request_id},
+            )
+            src = cur.fetchone()
+    if not src:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+
+    data = {
+        "name": src["name"],
+        "email": src["email"],
+        "phone": src.get("phone"),
+        "project_description": src.get("project_description") or "",
+        "quantity": src.get("quantity") or 1,
+        "approx_size": src.get("approx_size"),
+        "deadline": src.get("deadline"),
+        "material_preference": src.get("material_preference"),
+        "color_preference": src.get("color_preference"),
+        "use_case": src.get("use_case"),
+        "requirements": src.get("requirements") or [],
+        "delivery_method": src.get("delivery_method"),
+        "shipping_location": src.get("shipping_location"),
+        "additional_notes": src.get("additional_notes"),
+    }
+    new_id = save_request(data, "")
+    return {"success": True, "new_request_id": new_id, "duplicated_from": request_id}
