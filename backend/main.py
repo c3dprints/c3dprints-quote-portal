@@ -28,13 +28,13 @@ from pricing_engine import PricingSettings, calculate_quote
 load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
 ETSY_CHECKOUT_URL = os.getenv("ETSY_CHECKOUT_URL", "https://c3dprintsofficial.etsy.com/listing/1249586363")
 SHOPIFY_CHECKOUT_URL = os.getenv("SHOPIFY_CHECKOUT_URL", "https://c3dprints.com/products/custom-3d-printed-cosplay-personalized-character-art-fan-art")
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
 
 VALID_STATUSES = {
     "New",
@@ -292,7 +292,9 @@ def init_db():
                     checkout_url TEXT,
                     checkout_sent_at TIMESTAMPTZ,
                     paid BOOLEAN NOT NULL DEFAULT FALSE,
-                    paid_at TIMESTAMPTZ
+                    paid_at TIMESTAMPTZ,
+                    tracking_token TEXT UNIQUE,
+                    customer_status_note TEXT
                 );
                 """
             )
@@ -317,18 +319,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_platform TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_url TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests DROP CONSTRAINT IF EXISTS quote_requests_status_check;")
-            cur.execute("""
-                ALTER TABLE quote_requests
-                ADD CONSTRAINT quote_requests_status_check
-                CHECK (status IN ('New','Reviewing','Need Info','Quoted','Approved','Awaiting Payment','Paid','Printing','Completed','Archived'));
-            """)
-
 
 
 
@@ -639,6 +629,13 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
+                    checkout_platform,
+                    checkout_url,
+                    checkout_sent_at,
+                    paid,
+                    paid_at,
+                    tracking_token,
+                    customer_status_note,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
@@ -948,6 +945,8 @@ def ensure_checkout_schema_and_statuses():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS tracking_token TEXT UNIQUE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS customer_status_note TEXT;")
 
             cur.execute("""
                 ALTER TABLE quote_requests
@@ -1120,3 +1119,75 @@ def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=
 
     return {"success": True, "request": updated}
 
+
+
+
+def create_tracking_token() -> str:
+    return secrets.token_urlsafe(24)
+
+def get_or_create_tracking_token(request_id: int) -> str:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT tracking_token FROM quote_requests WHERE id = %(id)s;", {"id": request_id})
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+            if row.get("tracking_token"):
+                return row["tracking_token"]
+            token = create_tracking_token()
+            cur.execute("UPDATE quote_requests SET tracking_token = %(token)s WHERE id = %(id)s RETURNING tracking_token;", {"token": token, "id": request_id})
+            return cur.fetchone()["tracking_token"]
+
+def render_tracking_page(row: dict) -> str:
+    status = row.get("status") or "New"
+    paid = bool(row.get("paid"))
+    price = row.get("quoted_price") or row.get("final_price")
+    price_text = f"${float(price):.2f}" if price is not None else "Not listed yet"
+    done = {
+        "quoted": status in {"Quoted","Approved","Awaiting Payment","Paid","Printing","Completed"},
+        "approved": status in {"Approved","Awaiting Payment","Paid","Printing","Completed"},
+        "paid": paid or status in {"Paid","Printing","Completed"},
+        "printing": status in {"Printing","Completed"},
+        "completed": status == "Completed",
+    }
+    def step(label, ok):
+        return f"<div class='step {'done' if ok else 'pending'}'><span>{'✓' if ok else '○'}</span><strong>{html_escape(label)}</strong></div>"
+    steps = step("Quote Sent", done["quoted"]) + step("Quote Approved", done["approved"]) + step("Payment Received", done["paid"]) + step("Printing", done["printing"]) + step("Completed", done["completed"])
+    note = html_escape(row.get("customer_status_note") or "Your order status updates as C3D Prints moves your project through the workflow.")
+    return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>C3D Prints Order Status</title><style>
+body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;padding:24px}}.wrap{{max-width:760px;margin:auto}}.card{{background:#162236;border:1px solid #1e3550;border-radius:18px;padding:22px;margin-bottom:16px}}h1{{color:#33ccff;margin:0 0 8px}}p{{color:#8aa8c5}}.badge{{display:inline-block;border:1px solid #1e3550;border-radius:999px;padding:6px 10px;color:#33ccff;font-weight:bold}}.price{{font-size:30px;color:#00e890;font-weight:bold;margin:12px 0}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.detail{{background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:12px}}.detail label{{display:block;color:#8aa8c5;font-size:12px;margin-bottom:6px}}.step{{display:flex;gap:10px;align-items:center;background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:14px;margin-bottom:10px}}.done{{color:#00e890;border-color:rgba(0,232,144,.45)}}.pending{{color:#8aa8c5}}.note{{background:rgba(255,140,58,.08);border:1px solid rgba(255,140,58,.35);border-radius:12px;padding:14px;color:#ff8c3a}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}</style></head><body><div class='wrap'><div class='card'><h1>C3D Prints Order Status</h1><p>Tracking for quote/request #{html_escape(row.get('id'))}</p><span class='badge'>{html_escape(status)}</span><div class='price'>{html_escape(price_text)}</div><div class='grid'><div class='detail'><label>Customer</label><strong>{html_escape(row.get('name'))}</strong></div><div class='detail'><label>Payment</label><strong>{'Received' if paid else 'Not marked paid yet'}</strong></div><div class='detail'><label>Checkout Sent</label><strong>{html_escape(row.get('checkout_sent_at') or 'Not yet')}</strong></div><div class='detail'><label>Paid At</label><strong>{html_escape(row.get('paid_at') or 'Not yet')}</strong></div></div></div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Progress</h2>{steps}</div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Note</h2><div class='note'>{note}</div></div></div></body></html>"""
+
+@app.get("/track/{tracking_token}", response_class=HTMLResponse)
+def public_tracking_page(tracking_token: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id,name,email,status,final_price,quoted_price,checkout_sent_at,paid,paid_at,customer_status_note FROM quote_requests WHERE tracking_token = %(token)s;", {"token": tracking_token})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Tracking page not found")
+    return HTMLResponse(render_tracking_page(row))
+
+@app.post("/admin/requests/{request_id}/tracking")
+def create_request_tracking_link(request_id: int, admin=Depends(verify_admin)):
+    token = get_or_create_tracking_token(request_id)
+    return {"success": True, "tracking_token": token, "tracking_url": f"{PUBLIC_BASE_URL}/track/{token}"}
+
+@app.patch("/admin/requests/{request_id}/archive")
+def archive_request(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE quote_requests SET status='Archived' WHERE id=%(id)s RETURNING *;", {"id": request_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    return {"success": True, "request": row}
+
+@app.delete("/admin/requests/{request_id}")
+def delete_request(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM quote_requests WHERE id=%(id)s RETURNING id;", {"id": request_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    return {"success": True, "deleted_id": row["id"]}
