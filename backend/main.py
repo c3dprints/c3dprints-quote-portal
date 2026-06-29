@@ -147,14 +147,58 @@ def analyze_ascii_stl(raw: bytes) -> Optional[dict]:
         surface_area += triangle_area(a,b,c)
     return {"triangle_count":tri_count,"bbox":{"x":max_x-min_x,"y":max_y-min_y,"z":max_z-min_z},"volume_units3":abs(signed_volume),"surface_area_units2":surface_area}
 
+def analyze_obj_bytes(raw: bytes) -> Optional[dict]:
+    text=raw.decode("utf-8", errors="ignore")
+    verts=[]; faces=[]
+    for line in text.splitlines():
+        line=line.strip()
+        if not line or line[0]=="#": continue
+        parts=line.split()
+        tag=parts[0]
+        if tag=="v" and len(parts)>=4:
+            try: verts.append((float(parts[1]),float(parts[2]),float(parts[3])))
+            except ValueError: pass
+        elif tag=="f" and len(parts)>=4:
+            idxs=[]
+            for token in parts[1:]:
+                ref=token.split("/")[0]
+                if not ref: continue
+                try: i=int(ref)
+                except ValueError: continue
+                if i<0: i=len(verts)+i+1   # OBJ negative indices are relative
+                idxs.append(i)
+            # Fan-triangulate any n-gon face into triangles.
+            for k in range(1, len(idxs)-1):
+                faces.append((idxs[0], idxs[k], idxs[k+1]))
+    if len(verts)<3 or not faces: return None
+    min_x=min(v[0] for v in verts); min_y=min(v[1] for v in verts); min_z=min(v[2] for v in verts)
+    max_x=max(v[0] for v in verts); max_y=max(v[1] for v in verts); max_z=max(v[2] for v in verts)
+    signed_volume=0.0; surface_area=0.0; tri_count=0
+    n=len(verts)
+    for a,b,c in faces:
+        if not (1<=a<=n and 1<=b<=n and 1<=c<=n): continue
+        A,B,C=verts[a-1],verts[b-1],verts[c-1]
+        signed_volume += triangle_signed_volume(A,B,C)
+        surface_area += triangle_area(A,B,C)
+        tri_count += 1
+    if tri_count==0: return None
+    return {"triangle_count":tri_count,"bbox":{"x":max_x-min_x,"y":max_y-min_y,"z":max_z-min_z},"volume_units3":abs(signed_volume),"surface_area_units2":surface_area}
+
 def estimate_print_hours_from_stl(volume_cm3: float, height_mm: float, complexity: str) -> float:
     rate = 8.0 if complexity=="Low" else 6.5 if complexity=="Medium" else 5.0
     return round(max((volume_cm3/rate) + max(0,height_mm-30)/60 + 0.5, 0.5), 2)
 
-def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[str]) -> Optional[dict]:
-    if not filename.lower().endswith(".stl"): return None
-    parsed = analyze_binary_stl(raw) or analyze_ascii_stl(raw)
-    if not parsed: return {"filename":filename,"error":"Could not parse STL file."}
+def analyze_model_bytes(raw: bytes, filename: str, material_preference: Optional[str]) -> Optional[dict]:
+    name=filename.lower()
+    if name.endswith(".stl"):
+        source_format="stl"
+        parsed = analyze_binary_stl(raw) or analyze_ascii_stl(raw)
+    elif name.endswith(".obj"):
+        source_format="obj"
+        parsed = analyze_obj_bytes(raw)
+    else:
+        return None
+    if not parsed: return {"filename":filename,"error":f"Could not parse {source_format.upper()} file."}
     bbox=parsed["bbox"]; x,y,z=bbox["x"],bbox["y"],bbox["z"]
     volume_cm3=parsed["volume_units3"]/1000.0; surface_area_cm2=parsed["surface_area_units2"]/100.0
     density=guess_material_density(material_preference)
@@ -168,6 +212,7 @@ def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[s
     return {
         "filename":filename,
         "type":"stl_analysis_v1",
+        "source_format":source_format,
         "units_assumed":"mm",
         "triangle_count":parsed["triangle_count"],
         "dimensions_mm":{"x":round(x,2),"y":round(y,2),"z":round(z,2)},
@@ -183,6 +228,10 @@ def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[s
         "fail_rate":{"Low":20,"Medium":30,"High":45}.get(complexity,30),
         "warning":"Rough estimate only. True print time and grams require slicer settings, infill, layer height, supports, and orientation."
     }
+
+
+# Back-compat: older call sites and tests reference analyze_stl_bytes.
+analyze_stl_bytes = analyze_model_bytes
 
 
 def safe_storage_filename(filename: str) -> str:
@@ -514,7 +563,7 @@ async def quote_request(
             except Exception:
                 pass
 
-            stl_analysis = analyze_stl_bytes(raw_for_analysis, file.filename, material_preference)
+            stl_analysis = analyze_model_bytes(raw_for_analysis, file.filename, material_preference)
 
             if storage_enabled():
                 stored = upload_file_to_supabase_storage(request_id, file)
