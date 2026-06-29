@@ -1040,6 +1040,52 @@ def update_request_details(request_id: int, req: RequestDetailsUpdate, admin=Dep
     return {"success": True, "request": row}
 
 
+@app.get("/admin/requests/{request_id}/portal-link")
+def get_customer_portal_link(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT email FROM quote_requests WHERE id = %(id)s;", {"id": request_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    return {"success": True, "email": row["email"], "portal_url": portal_url_for(row["email"])}
+
+
+@app.post("/admin/requests/{request_id}/send-portal-link")
+def send_customer_portal_link(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT name, email FROM quote_requests WHERE id = %(id)s;", {"id": request_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    email = row["email"]
+    first_name = (row.get("name") or "there").split(" ")[0]
+    url = portal_url_for(email)
+    html_body = (
+        f'<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">'
+        f'<div style="text-align:center;margin-bottom:18px;">'
+        f'<img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;"></div>'
+        f'<p>Hi {html_escape(first_name)},</p>'
+        f'<p>You can view all of your C3D Prints quotes and orders, and their status, in one place:</p>'
+        f'<p style="text-align:center;margin:24px 0;">'
+        f'<a href="{url}" style="background:#1a73e8;color:#fff;text-decoration:none;font-weight:bold;'
+        f'padding:14px 28px;border-radius:8px;display:inline-block;">View My Orders</a></p>'
+        f'<p style="color:#666;font-size:12px;">Or paste this link into your browser:<br>{url}</p>'
+        f'<p>Thank you,<br>C3D Prints</p></div>'
+    )
+    text_body = f"Hi {first_name},\n\nView all your C3D Prints quotes and orders here:\n{url}\n\nThank you,\nC3D Prints"
+    result = send_quote_notification(
+        to_email=email,
+        subject="Your C3D Prints orders",
+        html_body=html_body,
+        text_body=text_body,
+    )
+    if not result.get("sent"):
+        raise HTTPException(status_code=500, detail=f"Email failed: {result.get('reason', 'Unknown error')}")
+    return {"success": True, "email": email}
+
+
 @app.patch("/admin/requests/{request_id}/job-details")
 def update_job_details(
     request_id: int,
