@@ -991,6 +991,55 @@ class JobDetailsUpdateRequest(BaseModel):
     approve: bool = False
 
 
+class RequestDetailsUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    project_description: Optional[str] = None
+    quantity: Optional[int] = None
+    approx_size: Optional[str] = None
+    deadline: Optional[str] = None
+    material_preference: Optional[str] = None
+    color_preference: Optional[str] = None
+    use_case: Optional[str] = None
+    delivery_method: Optional[str] = None
+    shipping_location: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+
+# Fields the admin may edit on a request (incl. the project/product description).
+EDITABLE_REQUEST_FIELDS = [
+    "name", "email", "phone", "project_description", "quantity", "approx_size",
+    "deadline", "material_preference", "color_preference", "use_case",
+    "delivery_method", "shipping_location", "additional_notes",
+]
+
+
+@app.patch("/admin/requests/{request_id}/details")
+def update_request_details(request_id: int, req: RequestDetailsUpdate, admin=Depends(verify_admin)):
+    provided = req.dict(exclude_unset=True)
+    fields = [f for f in EDITABLE_REQUEST_FIELDS if f in provided]
+    if not fields:
+        raise HTTPException(status_code=400, detail="No editable fields provided")
+    if "name" in fields and not (provided.get("name") or "").strip():
+        raise HTTPException(status_code=400, detail="Name cannot be empty")
+    if "email" in fields and not (provided.get("email") or "").strip():
+        raise HTTPException(status_code=400, detail="Email cannot be empty")
+    set_clause = ", ".join(f"{f} = %({f})s" for f in fields)
+    params = {f: provided[f] for f in fields}
+    params["request_id"] = request_id
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE quote_requests SET {set_clause} WHERE id = %(request_id)s RETURNING *;",
+                params,
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    return {"success": True, "request": row}
+
+
 @app.patch("/admin/requests/{request_id}/job-details")
 def update_job_details(
     request_id: int,
