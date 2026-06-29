@@ -29,6 +29,8 @@ load_dotenv()
 
 APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
+# Absolute URL so it works in emails and server-rendered pages. Served by GitHub Pages from repo root.
+LOGO_URL = os.getenv("LOGO_URL", "https://c3dprints.github.io/c3dprints-quote-portal/logo.png")
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -996,7 +998,10 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
             approval_token = quote_request.get("approval_token") or secrets.token_urlsafe(24)
             approval_url = f"{PUBLIC_BASE_URL}/approve/{approval_token}"
             html_body = (
-                f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">"""
+                f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">"""
+                f"""<div style="text-align:center;margin-bottom:18px;">"""
+                f"""<img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;">"""
+                f"""</div>"""
                 f"""<pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre>"""
                 f"""{approval_button_html(approval_token)}"""
                 f"""</div>"""
@@ -1243,7 +1248,7 @@ def render_tracking_page(row: dict) -> str:
     steps = step("Quote Sent", done["quoted"]) + step("Quote Approved", done["approved"]) + step("Payment Received", done["paid"]) + step("Printing", done["printing"]) + step("Completed", done["completed"])
     note = html_escape(row.get("customer_status_note") or "Your order status updates as C3D Prints moves your project through the workflow.")
     return f"""<!doctype html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'><title>C3D Prints Order Status</title><style>
-body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;padding:24px}}.wrap{{max-width:760px;margin:auto}}.card{{background:#162236;border:1px solid #1e3550;border-radius:18px;padding:22px;margin-bottom:16px}}h1{{color:#33ccff;margin:0 0 8px}}p{{color:#8aa8c5}}.badge{{display:inline-block;border:1px solid #1e3550;border-radius:999px;padding:6px 10px;color:#33ccff;font-weight:bold}}.price{{font-size:30px;color:#00e890;font-weight:bold;margin:12px 0}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.detail{{background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:12px}}.detail label{{display:block;color:#8aa8c5;font-size:12px;margin-bottom:6px}}.step{{display:flex;gap:10px;align-items:center;background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:14px;margin-bottom:10px}}.done{{color:#00e890;border-color:rgba(0,232,144,.45)}}.pending{{color:#8aa8c5}}.note{{background:rgba(255,140,58,.08);border:1px solid rgba(255,140,58,.35);border-radius:12px;padding:14px;color:#ff8c3a}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}</style></head><body><div class='wrap'><div class='card'><h1>C3D Prints Order Status</h1><p>Tracking for quote/request #{html_escape(row.get('id'))}</p><span class='badge'>{html_escape(status)}</span><div class='price'>{html_escape(price_text)}</div><div class='grid'><div class='detail'><label>Customer</label><strong>{html_escape(row.get('name'))}</strong></div><div class='detail'><label>Payment</label><strong>{'Received' if paid else 'Not marked paid yet'}</strong></div><div class='detail'><label>Checkout Sent</label><strong>{html_escape(row.get('checkout_sent_at') or 'Not yet')}</strong></div><div class='detail'><label>Paid At</label><strong>{html_escape(row.get('paid_at') or 'Not yet')}</strong></div></div></div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Progress</h2>{steps}</div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Note</h2><div class='note'>{note}</div></div></div></body></html>"""
+body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;padding:24px}}.wrap{{max-width:760px;margin:auto}}.card{{background:#162236;border:1px solid #1e3550;border-radius:18px;padding:22px;margin-bottom:16px}}h1{{color:#33ccff;margin:0 0 8px}}p{{color:#8aa8c5}}.badge{{display:inline-block;border:1px solid #1e3550;border-radius:999px;padding:6px 10px;color:#33ccff;font-weight:bold}}.price{{font-size:30px;color:#00e890;font-weight:bold;margin:12px 0}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.detail{{background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:12px}}.detail label{{display:block;color:#8aa8c5;font-size:12px;margin-bottom:6px}}.step{{display:flex;gap:10px;align-items:center;background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:14px;margin-bottom:10px}}.done{{color:#00e890;border-color:rgba(0,232,144,.45)}}.pending{{color:#8aa8c5}}.note{{background:rgba(255,140,58,.08);border:1px solid rgba(255,140,58,.35);border-radius:12px;padding:14px;color:#ff8c3a}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}</style></head><body><div class='wrap'><div class='card'><div style='text-align:center;margin-bottom:6px;'><img src='{LOGO_URL}' alt='C3D Prints' style='width:90px;height:auto;'></div><h1>C3D Prints Order Status</h1><p>Tracking for quote/request #{html_escape(str(row.get('id')))}</p><span class='badge'>{html_escape(status)}</span><div class='price'>{html_escape(price_text)}</div><div class='grid'><div class='detail'><label>Customer</label><strong>{html_escape(str(row.get('name') or ''))}</strong></div><div class='detail'><label>Payment</label><strong>{'Received' if paid else 'Not marked paid yet'}</strong></div><div class='detail'><label>Checkout Sent</label><strong>{html_escape(str(row.get('checkout_sent_at') or 'Not yet'))}</strong></div><div class='detail'><label>Paid At</label><strong>{html_escape(str(row.get('paid_at') or 'Not yet'))}</strong></div></div></div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Progress</h2>{steps}</div><div class='card'><h2 style='color:#ff8c3a;margin-top:0'>Note</h2><div class='note'>{note}</div></div></div></body></html>"""
 
 @app.get("/track/{tracking_token}", response_class=HTMLResponse)
 def public_tracking_page(tracking_token: str):
@@ -1338,6 +1343,7 @@ h1{{color:#33ccff;margin:0 0 6px}}p{{color:#8aa8c5}}
 .badge{{display:inline-block;border-radius:999px;padding:6px 12px;font-weight:bold;margin-bottom:8px}}
 .done{{color:#00e890;border:1px solid rgba(0,232,144,.45)}}
 </style></head><body><div class='wrap'><div class='card'>
+<div style='text-align:center;margin-bottom:6px;'><img src='{LOGO_URL}' alt='C3D Prints' style='width:96px;height:auto;'></div>
 <h1>C3D Prints</h1><p>Quote #{rid} for {name}</p>{body}
 </div></div></body></html>"""
 
@@ -1358,6 +1364,7 @@ body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;pad
 h1{{color:#00e890;margin:0 0 10px}}p{{color:#8aa8c5}}
 .check{{font-size:54px;color:#00e890}}
 </style></head><body><div class='wrap'><div class='card'>
+<div style='margin-bottom:8px;'><img src='{LOGO_URL}' alt='C3D Prints' style='width:90px;height:auto;'></div>
 <div class='check'>&#10004;</div>
 <h1>Quote Approved</h1>
 <p>Thanks, {name}! Your quote #{rid} is approved.</p>
