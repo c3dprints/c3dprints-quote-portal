@@ -1,4 +1,7 @@
 import json
+import base64
+import hashlib
+import hmac
 import math
 import os
 import re
@@ -31,6 +34,44 @@ APP_NAME = os.getenv("APP_NAME", "C3D Prints Quote Portal")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
 # Absolute URL so it works in emails and server-rendered pages. Served by GitHub Pages from repo root.
 LOGO_URL = os.getenv("LOGO_URL", "https://c3dprints.github.io/c3dprints-quote-portal/logo.png")
+
+
+def _portal_secret() -> bytes:
+    return os.getenv("JWT_SECRET", "c3d-portal-fallback-secret").encode()
+
+
+def make_portal_token(email: str) -> str:
+    """Stateless, stable per-customer token: base64(email).hmac_sig. No DB column needed."""
+    e = (email or "").strip().lower()
+    sig = hmac.new(_portal_secret(), e.encode(), hashlib.sha256).hexdigest()[:16]
+    payload = base64.urlsafe_b64encode(e.encode()).decode().rstrip("=")
+    return f"{payload}.{sig}"
+
+
+def read_portal_token(token: str) -> Optional[str]:
+    """Verify a portal token and return its email, or None if tampered/invalid."""
+    try:
+        payload, sig = token.rsplit(".", 1)
+        pad = "=" * (-len(payload) % 4)
+        email = base64.urlsafe_b64decode(payload + pad).decode().strip().lower()
+        expected = hmac.new(_portal_secret(), email.encode(), hashlib.sha256).hexdigest()[:16]
+        return email if hmac.compare_digest(sig, expected) else None
+    except Exception:
+        return None
+
+
+def portal_url_for(email: str) -> str:
+    return f"{PUBLIC_BASE_URL}/portal/{make_portal_token(email)}"
+
+
+def portal_footer_html(email: str) -> str:
+    if not email:
+        return ""
+    return (
+        f"<p style='text-align:center;margin-top:22px;font-size:13px;'>"
+        f"<a href='{portal_url_for(email)}' style='color:#1a73e8;font-weight:bold;text-decoration:none;'>"
+        f"View all my quotes &amp; orders</a></p>"
+    )
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -1142,6 +1183,7 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
                 f"""</div>"""
                 f"""<pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre>"""
                 f"""{approval_button_html(approval_token)}"""
+                f"""{portal_footer_html(quote_request["email"])}"""
                 f"""</div>"""
             )
             text_body = f"{message}\n\nApprove this quote: {approval_url}"
@@ -1284,6 +1326,7 @@ C3D Prints
                 </a>
               </p>
               <p style="color:#666;font-size:12px;">Bookmark this to check your order status anytime:<br>{tracking_url}</p>
+              {portal_footer_html(row["email"])}
               <p>Thank you,<br>C3D Prints</p>
             </div>
             """
@@ -1402,6 +1445,7 @@ def send_payment_confirmation(row: dict) -> None:
             f'<p>Your order is now in our production queue. You can follow its progress, '
             f'from printing through completion, on your tracking page.</p>'
             f'{track_html}'
+            f'{portal_footer_html(email)}'
             f'<p>Thank you,<br>C3D Prints</p></div>'
         )
         text_body = (
@@ -1463,6 +1507,101 @@ def public_tracking_page(tracking_token: str):
     if not row:
         raise HTTPException(status_code=404, detail="Tracking page not found")
     return HTMLResponse(render_tracking_page(row))
+
+
+def render_portal_page(email: str, rows: list) -> str:
+    name = ""
+    for r in rows:
+        if r.get("name"):
+            name = r["name"].split(" ")[0]
+            break
+    greeting = html_escape(name) if name else "there"
+
+    def status_color(status):
+        return {
+            "New": "var(--muted)", "Reviewing": "#33ccff", "Need Info": "#ffd166",
+            "Quoted": "#33ccff", "Approved": "#00e890", "Awaiting Payment": "#ff8c3a",
+            "Paid": "#00e890", "Printing": "#ff8c3a", "Completed": "#00e890",
+            "Archived": "var(--muted)",
+        }.get(status, "var(--muted)")
+
+    cards = []
+    if not rows:
+        cards.append("<div class='empty'>No quote requests found for your email yet.</div>")
+    for r in rows:
+        status = r.get("status") or "New"
+        price = r.get("quoted_price") or r.get("final_price")
+        price_text = f"${float(price):.2f}" if price is not None else "Pending"
+        project = html_escape((str(r.get("project_description") or "")[:130]))
+        created = ""
+        if r.get("created_at"):
+            created = html_escape(str(r["created_at"])[:10])
+        actions = ""
+        if status == "Quoted" and r.get("approval_token"):
+            actions += (f"<a class='btn approve' href='{PUBLIC_BASE_URL}/approve/"
+                        f"{html_escape(str(r.get('approval_token')))}'>Review &amp; Approve</a>")
+        if r.get("tracking_token"):
+            actions += (f"<a class='btn track' href='{PUBLIC_BASE_URL}/track/"
+                        f"{html_escape(str(r.get('tracking_token')))}'>Track Order</a>")
+        actions_html = f"<div class='qactions'>{actions}</div>" if actions else ""
+        cards.append(
+            f"<div class='qcard'>"
+            f"<div class='qhead'><span class='qid'>Request #{html_escape(str(r.get('id')))}</span>"
+            f"<span class='badge' style='color:{status_color(status)};border-color:{status_color(status)}'>{html_escape(status)}</span></div>"
+            f"<div class='qproject'>{project}</div>"
+            f"<div class='qmeta'><span>Submitted: {created or '--'}</span><span class='qprice'>{html_escape(price_text)}</span></div>"
+            f"{actions_html}"
+            f"</div>"
+        )
+
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>My C3D Prints Quotes</title><style>
+:root{{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue-l:#33ccff;--orange-l:#ff8c3a;--green:#00e890;--text:#ddeeff;--muted:#7fa0bd}}
+body{{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif;padding:24px}}
+.wrap{{max-width:760px;margin:auto}}
+.top{{text-align:center;margin-bottom:18px}}
+.top img{{width:96px;height:auto}}
+h1{{color:var(--blue-l);margin:8px 0 4px;font-size:24px}}
+.sub{{color:var(--muted);margin:0 0 18px;text-align:center}}
+.qcard{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:14px}}
+.qhead{{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}}
+.qid{{font-weight:bold;color:var(--text)}}
+.badge{{border:1px solid;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:bold}}
+.qproject{{color:#cfe3f7;margin-bottom:10px}}
+.qmeta{{display:flex;justify-content:space-between;color:var(--muted);font-size:13px}}
+.qprice{{color:var(--green);font-weight:bold;font-size:16px}}
+.qactions{{margin-top:14px;display:flex;gap:10px;flex-wrap:wrap}}
+.btn{{display:inline-block;text-decoration:none;font-weight:bold;padding:10px 16px;border-radius:8px;font-size:14px}}
+.btn.approve{{background:#00b341;color:#fff}}
+.btn.track{{background:#1a73e8;color:#fff}}
+.empty{{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:26px;text-align:center;color:var(--muted)}}
+</style></head><body><div class='wrap'>
+<div class='top'><img src='{LOGO_URL}' alt='C3D Prints'><h1>My Quotes &amp; Orders</h1></div>
+<p class='sub'>Hi {greeting}, here is everything tied to {html_escape(email)}.</p>
+{''.join(cards)}
+</div></body></html>"""
+
+
+@app.get("/portal/{token}", response_class=HTMLResponse)
+def customer_portal(token: str):
+    email = read_portal_token(token)
+    if not email:
+        raise HTTPException(status_code=404, detail="Portal link not found")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, created_at, name, project_description, status, quoted_price,
+                       final_price, approval_token, tracking_token
+                FROM quote_requests
+                WHERE lower(email) = %(email)s AND status <> 'Archived'
+                ORDER BY created_at DESC;
+                """,
+                {"email": email},
+            )
+            rows = cur.fetchall()
+    return HTMLResponse(render_portal_page(email, rows))
 
 @app.post("/admin/requests/{request_id}/tracking")
 def create_request_tracking_link(request_id: int, admin=Depends(verify_admin)):
@@ -1652,3 +1791,46 @@ def delete_request(request_id: int, admin=Depends(verify_admin)):
     if not row:
         raise HTTPException(status_code=404, detail="Quote request not found")
     return {"success": True, "deleted_id": row["id"]}
+
+
+@app.post("/admin/requests/{request_id}/duplicate")
+def duplicate_request(request_id: int, admin=Depends(verify_admin)):
+    """Create a new request copying the source's contact + project details.
+
+    The new request shares the customer's email, so it automatically appears in
+    their portal alongside their other projects. Pricing/quote/payment state,
+    tokens, AI output, and uploaded files are NOT copied (it's a fresh project).
+    """
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT name, email, phone, project_description, quantity, approx_size,
+                       deadline, material_preference, color_preference, use_case,
+                       requirements, delivery_method, shipping_location, additional_notes
+                FROM quote_requests WHERE id = %(id)s;
+                """,
+                {"id": request_id},
+            )
+            src = cur.fetchone()
+    if not src:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+
+    data = {
+        "name": src["name"],
+        "email": src["email"],
+        "phone": src.get("phone"),
+        "project_description": src.get("project_description") or "",
+        "quantity": src.get("quantity") or 1,
+        "approx_size": src.get("approx_size"),
+        "deadline": src.get("deadline"),
+        "material_preference": src.get("material_preference"),
+        "color_preference": src.get("color_preference"),
+        "use_case": src.get("use_case"),
+        "requirements": src.get("requirements") or [],
+        "delivery_method": src.get("delivery_method"),
+        "shipping_location": src.get("shipping_location"),
+        "additional_notes": src.get("additional_notes"),
+    }
+    new_id = save_request(data, "")
+    return {"success": True, "new_request_id": new_id, "duplicated_from": request_id}
