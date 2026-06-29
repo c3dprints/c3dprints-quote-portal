@@ -8,7 +8,7 @@ import re
 import secrets
 from html import escape as html_escape
 import struct
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
@@ -491,6 +491,20 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
                 "UPDATE quote_requests SET uploaded_files = %(uploaded_files)s WHERE id = %(request_id)s;",
                 {"uploaded_files": Json(uploaded_files), "request_id": request_id},
             )
+
+
+def delete_file_from_supabase_storage(storage_path: str) -> bool:
+    """Delete one object from the storage bucket. 404 (already gone) counts as success."""
+    if not storage_enabled() or not storage_path:
+        return False
+    url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{storage_path}"
+    headers = {"Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}", "apikey": SUPABASE_SERVICE_ROLE_KEY}
+    try:
+        resp = requests.delete(url, headers=headers, timeout=15)
+        return resp.status_code in (200, 204, 404)
+    except Exception as exc:
+        print(f"[storage] delete failed for {storage_path}: {exc}")
+        return False
 
 
 
@@ -2040,6 +2054,73 @@ def admin_upload_files(
     combined = existing + new_files
     update_request_files(request_id, combined)
     return {"success": True, "uploaded_files": combined, "added": len(new_files)}
+
+
+@app.post("/maintenance/storage-cleanup")
+def storage_cleanup(dry_run: bool = False, x_maintenance_key: str = Header(None)):
+    """Free Supabase storage by deleting files from old, inactive requests while
+    keeping the DB metadata + geometry analysis. Auth via X-Maintenance-Key.
+
+    Retention (env-tunable): never-quoted (New/Need Info, no quote sent) ->
+    CLEANUP_UNQUOTED_DAYS (90); Archived -> CLEANUP_ARCHIVED_DAYS (30); Completed
+    -> CLEANUP_COMPLETED_DAYS (365). Active pipeline is never touched.
+    Pass ?dry_run=true to preview without deleting."""
+    expected = os.getenv("MAINTENANCE_KEY")
+    if not expected or not x_maintenance_key or not hmac.compare_digest(x_maintenance_key, expected):
+        raise HTTPException(status_code=401, detail="Invalid or missing maintenance key")
+    if not storage_enabled():
+        return {"success": False, "reason": "Supabase storage is not configured"}
+
+    now = datetime.now(timezone.utc)
+    cutoffs = {
+        "unquoted": now - timedelta(days=int(os.getenv("CLEANUP_UNQUOTED_DAYS", 90))),
+        "archived": now - timedelta(days=int(os.getenv("CLEANUP_ARCHIVED_DAYS", 30))),
+        "completed": now - timedelta(days=int(os.getenv("CLEANUP_COMPLETED_DAYS", 365))),
+    }
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, status, uploaded_files
+                FROM quote_requests
+                WHERE uploaded_files IS NOT NULL AND uploaded_files::text <> '[]'
+                  AND (
+                    (status IN ('New','Need Info') AND quote_sent_at IS NULL AND created_at < %(unquoted)s)
+                    OR (status = 'Archived' AND created_at < %(archived)s)
+                    OR (status = 'Completed' AND created_at < %(completed)s)
+                  )
+                ORDER BY created_at ASC
+                LIMIT 500;
+                """,
+                cutoffs,
+            )
+            rows = cur.fetchall()
+
+    requests_affected = 0
+    files_freed = 0
+    for row in rows:
+        files = row.get("uploaded_files") or []
+        changed = False
+        for f in files:
+            if isinstance(f, dict) and f.get("storage_path"):
+                files_freed += 1
+                changed = True
+                if not dry_run:
+                    delete_file_from_supabase_storage(f["storage_path"])
+                    f["storage_path"] = None  # keep filename + stl_analysis, drop the binary pointer
+        if changed:
+            requests_affected += 1
+            if not dry_run:
+                update_request_files(row["id"], files)
+
+    print(f"[cleanup] {'DRY RUN' if dry_run else 'DELETED'}: {files_freed} file(s) "
+          f"across {requests_affected} request(s)")
+    return {
+        "success": True,
+        "dry_run": dry_run,
+        "requests_affected": requests_affected,
+        "files_freed": files_freed,
+    }
 
 
 # ----- Production queue / printers -----
