@@ -1846,6 +1846,51 @@ def duplicate_request(request_id: int, admin=Depends(verify_admin)):
     return {"success": True, "new_request_id": new_id, "duplicated_from": request_id}
 
 
+class AdminCreateRequest(BaseModel):
+    name: str
+    email: str
+    phone: Optional[str] = None
+    project_description: Optional[str] = ""
+    quantity: int = 1
+    approx_size: Optional[str] = None
+    deadline: Optional[str] = None
+    material_preference: Optional[str] = None
+    color_preference: Optional[str] = None
+    use_case: Optional[str] = None
+    requirements: Optional[List[str]] = None
+    delivery_method: Optional[str] = None
+    shipping_location: Optional[str] = None
+    additional_notes: Optional[str] = None
+
+
+@app.post("/admin/requests")
+def admin_create_request(req: AdminCreateRequest, admin=Depends(verify_admin)):
+    """Create a request from scratch (e.g. a customer who can't use the public form).
+    Shares the customer's email, so it appears in their portal like any other."""
+    name = (req.name or "").strip()
+    email = (req.email or "").strip()
+    if not name or not email:
+        raise HTTPException(status_code=400, detail="Name and email are required")
+    data = {
+        "name": name,
+        "email": email,
+        "phone": req.phone,
+        "project_description": (req.project_description or "").strip(),
+        "quantity": max(1, int(req.quantity or 1)),
+        "approx_size": req.approx_size,
+        "deadline": req.deadline,
+        "material_preference": req.material_preference,
+        "color_preference": req.color_preference,
+        "use_case": req.use_case,
+        "requirements": req.requirements or [],
+        "delivery_method": req.delivery_method,
+        "shipping_location": req.shipping_location,
+        "additional_notes": req.additional_notes,
+    }
+    new_id = save_request(data, "")
+    return {"success": True, "new_request_id": new_id}
+
+
 @app.post("/admin/requests/{request_id}/files")
 def admin_upload_files(
     request_id: int,
