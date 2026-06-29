@@ -1113,7 +1113,10 @@ C3D Prints
 """
 
             html_body = f"""
-            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">
+            <div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">
+              <div style="text-align:center;margin-bottom:18px;">
+                <img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;">
+              </div>
               <p>Hi {html_escape(first_name)},</p>
               <p>Thanks for approving your custom C3D Prints quote.</p>
               <p><strong>Approved quote amount:</strong> {html_escape(price_text)}</p>
