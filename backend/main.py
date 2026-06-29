@@ -159,6 +159,10 @@ def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[s
     volume_cm3=parsed["volume_units3"]/1000.0; surface_area_cm2=parsed["surface_area_units2"]/100.0
     density=guess_material_density(material_preference)
     grams=volume_cm3*density
+    # Solid volume hugely overestimates real material use. Apply a rough infill factor
+    # (walls + sparse infill) so pricing isn't wildly high. Admin can still adjust.
+    infill_factor=float(os.getenv("DEFAULT_INFILL_FACTOR", 0.45))
+    grams_infill=grams*infill_factor
     largest=max(x,y,z)
     complexity="High" if parsed["triangle_count"]>100000 or z>120 or largest>220 else "Medium" if parsed["triangle_count"]>25000 or z>60 or largest>120 else "Low"
     return {
@@ -171,6 +175,8 @@ def analyze_stl_bytes(raw: bytes, filename: str, material_preference: Optional[s
         "surface_area_cm2":round(surface_area_cm2,2),
         "material_density_g_cm3":density,
         "estimated_grams_solid":round(grams,1),
+        "infill_factor":infill_factor,
+        "estimated_grams":round(grams_infill,1),
         "estimated_hours_rough":estimate_print_hours_from_stl(volume_cm3,z,complexity),
         "complexity":complexity,
         "complexity_multiplier":{"Low":1.0,"Medium":1.25,"High":1.5}.get(complexity,1.25),
@@ -721,6 +727,82 @@ def generate_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
         "success": True,
         "ai_quote_assist": result["text"],
         "request": updated,
+    }
+
+
+def pick_best_stl_analysis(uploaded_files) -> Optional[dict]:
+    """Return the first usable STL analysis from a request's uploaded files."""
+    for f in (uploaded_files or []):
+        if isinstance(f, dict):
+            a = f.get("stl_analysis")
+            if isinstance(a, dict) and not a.get("error"):
+                return a
+    return None
+
+
+@app.post("/admin/requests/{request_id}/auto-price")
+def auto_price_from_stl(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, quantity, uploaded_files FROM quote_requests WHERE id = %(id)s;",
+                {"id": request_id},
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+
+    analysis = pick_best_stl_analysis(row.get("uploaded_files"))
+    if not analysis:
+        raise HTTPException(status_code=400, detail="No STL analysis available. Upload an .stl file to auto-price.")
+
+    # Prefer the infill-adjusted grams; fall back to applying infill to solid for
+    # older records analyzed before estimated_grams existed.
+    infill = float(os.getenv("DEFAULT_INFILL_FACTOR", 0.45))
+    grams = analysis.get("estimated_grams")
+    if grams is None:
+        solid = analysis.get("estimated_grams_solid")
+        grams = round(solid * infill, 1) if solid else None
+    hours = analysis.get("estimated_hours_rough")
+    if not grams or not hours or grams <= 0 or hours <= 0:
+        raise HTTPException(status_code=400, detail="STL analysis is missing usable grams/hours to price.")
+
+    quantity = max(1, int(row.get("quantity") or 1))
+    fail_rate = analysis.get("fail_rate", 30)
+    complexity_multiplier = analysis.get("complexity_multiplier", 1.25)
+
+    try:
+        quote = calculate_quote(
+            grams=grams,
+            hours=hours,
+            quantity=quantity,
+            fail_rate=fail_rate,
+            complexity_multiplier=complexity_multiplier,
+            settings=get_pricing_settings(),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {
+        "success": True,
+        "source": "stl_analysis",
+        "inputs": {
+            "grams": grams,
+            "hours": hours,
+            "fail_rate": fail_rate,
+            "complexity_multiplier": complexity_multiplier,
+            "quantity": quantity,
+        },
+        "stl": {
+            "filename": analysis.get("filename"),
+            "dimensions_mm": analysis.get("dimensions_mm"),
+            "volume_cm3": analysis.get("volume_cm3"),
+            "estimated_grams_solid": analysis.get("estimated_grams_solid"),
+            "infill_factor": analysis.get("infill_factor", infill),
+            "complexity": analysis.get("complexity"),
+        },
+        "quote": quote,
+        "recommended_price": quote["totals"]["suggested_sell_price"],
     }
 
 
