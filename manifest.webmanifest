@@ -1,0 +1,15 @@
+{
+  "name": "C3D Prints Admin",
+  "short_name": "C3D Admin",
+  "description": "C3D Prints quoting and order admin dashboard",
+  "start_url": "./admin.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b1623",
+  "theme_color": "#0b1623",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
