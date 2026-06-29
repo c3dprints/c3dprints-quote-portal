@@ -15,7 +15,7 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, Request
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -292,12 +292,7 @@ def init_db():
                     checkout_url TEXT,
                     checkout_sent_at TIMESTAMPTZ,
                     paid BOOLEAN NOT NULL DEFAULT FALSE,
-                    paid_at TIMESTAMPTZ,
-                    tracking_token TEXT UNIQUE,
-                    payment_platform TEXT,
-                    payment_order_id TEXT,
-                    payment_detected_at TIMESTAMPTZ,
-                    customer_status_note TEXT
+                    paid_at TIMESTAMPTZ
                 );
                 """
             )
@@ -322,6 +317,18 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_platform TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_url TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests DROP CONSTRAINT IF EXISTS quote_requests_status_check;")
+            cur.execute("""
+                ALTER TABLE quote_requests
+                ADD CONSTRAINT quote_requests_status_check
+                CHECK (status IN ('New','Reviewing','Need Info','Quoted','Approved','Awaiting Payment','Paid','Printing','Completed','Archived'));
+            """)
+
 
 
 
@@ -379,102 +386,6 @@ def update_request_files(request_id: int, uploaded_files: list) -> None:
             )
 
 
-
-
-
-def create_tracking_token() -> str:
-    return secrets.token_urlsafe(24)
-
-
-def get_or_create_tracking_token(request_id: int) -> str:
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT tracking_token FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
-            row = cur.fetchone()
-            if not row:
-                raise HTTPException(status_code=404, detail="Quote request not found")
-            if row.get("tracking_token"):
-                return row["tracking_token"]
-            token = create_tracking_token()
-            cur.execute(
-                "UPDATE quote_requests SET tracking_token = %(tracking_token)s WHERE id = %(request_id)s RETURNING tracking_token;",
-                {"tracking_token": token, "request_id": request_id},
-            )
-            return cur.fetchone()["tracking_token"]
-
-
-def clean_text(value) -> str:
-    return "" if value is None else str(value)
-
-
-def find_quote_id_in_text(*values) -> Optional[int]:
-    combined = " ".join(clean_text(v) for v in values)
-    for pattern in [r"quote\s*#?\s*(\d+)", r"c3d\s*quote\s*#?\s*(\d+)", r"request\s*#?\s*(\d+)", r"\b#(\d{1,8})\b"]:
-        match = re.search(pattern, combined, re.IGNORECASE)
-        if match:
-            try:
-                return int(match.group(1))
-            except Exception:
-                return None
-    return None
-
-
-def render_tracking_page(row: dict) -> str:
-    status = row.get("status") or "New"
-    paid = bool(row.get("paid"))
-    price = row.get("quoted_price") or row.get("final_price")
-    price_text = f"${float(price):.2f}" if price is not None else "Not listed yet"
-    steps = [
-        ("Quoted", status in {"Quoted", "Approved", "Awaiting Payment", "Paid", "Printing", "Completed"}),
-        ("Approved", status in {"Approved", "Awaiting Payment", "Paid", "Printing", "Completed"}),
-        ("Payment Received", paid or status in {"Paid", "Printing", "Completed"}),
-        ("Printing", status in {"Printing", "Completed"}),
-        ("Completed", status == "Completed"),
-    ]
-    step_html = "".join(f"<div class='step {'done' if done else 'pending'}'><span>{'✓' if done else '○'}</span><strong>{html_escape(label)}</strong></div>" for label, done in steps)
-    note = row.get("customer_status_note") or "Your request is moving through the C3D Prints workflow."
-    return f"""<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><title>C3D Prints Order Status #{html_escape(row.get("id"))}</title><meta name="viewport" content="width=device-width, initial-scale=1.0"><style>
-:root{{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue:#33ccff;--orange:#ff8c3a;--green:#00e890;--text:#ddeeff;--muted:#8aa8c5}}
-*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif;padding:24px}}.wrap{{max-width:760px;margin:0 auto}}.card{{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:22px;margin-bottom:16px}}h1{{color:var(--blue);margin:0 0 8px}}p{{line-height:1.5;color:var(--muted)}}.badge{{display:inline-block;border:1px solid var(--border);border-radius:999px;padding:6px 10px;color:var(--blue);font-weight:bold}}.price{{font-size:30px;font-weight:bold;color:var(--green);margin:12px 0}}.grid{{display:grid;grid-template-columns:1fr 1fr;gap:12px}}.detail{{background:var(--input);border:1px solid var(--border);border-radius:12px;padding:12px}}.detail label{{display:block;color:var(--muted);font-size:12px;margin-bottom:6px}}.step{{display:flex;align-items:center;gap:10px;background:var(--input);border:1px solid var(--border);border-radius:12px;padding:14px;margin-bottom:10px}}.step.done{{border-color:rgba(0,232,144,.45);color:var(--green)}}.step.pending{{color:var(--muted)}}.note{{background:rgba(255,140,58,.08);border:1px solid rgba(255,140,58,.35);border-radius:12px;padding:14px;color:var(--orange)}}@media(max-width:640px){{.grid{{grid-template-columns:1fr}}body{{padding:14px}}}}
-</style></head><body><div class="wrap"><div class="card"><h1>C3D Prints Order Status</h1><p>Tracking for quote/request #{html_escape(row.get("id"))}</p><span class="badge">{html_escape(status)}</span><div class="price">{html_escape(price_text)}</div><div class="grid"><div class="detail"><label>Customer</label><strong>{html_escape(row.get("name"))}</strong></div><div class="detail"><label>Payment</label><strong>{'Received' if paid else 'Not marked paid yet'}</strong></div><div class="detail"><label>Checkout Sent</label><strong>{html_escape(row.get("checkout_sent_at") or "Not yet")}</strong></div><div class="detail"><label>Last Payment Update</label><strong>{html_escape(row.get("payment_detected_at") or row.get("paid_at") or "Not yet")}</strong></div></div></div><div class="card"><h2 style="color:var(--orange);margin-top:0;">Progress</h2>{step_html}</div><div class="card"><h2 style="color:var(--orange);margin-top:0;">Note</h2><div class="note">{html_escape(note)}</div></div></div></body></html>"""
-
-
-def send_payment_received_email(row: dict) -> dict:
-    token = row.get("tracking_token")
-    if not token:
-        return {"sent": False, "reason": "No tracking token available"}
-    tracking_url = f"{PUBLIC_BASE_URL}/track/{token}"
-    first_name = (row.get("name") or "there").split(" ")[0]
-            tracking_token = get_or_create_tracking_token(request_id)
-            tracking_url = f"{PUBLIC_BASE_URL}/track/{tracking_token}"
-    text_body = f"Hi {first_name},\n\nPayment has been marked as received for your C3D Prints custom order.\n\nTrack your order here:\n{tracking_url}\n\nThank you,\nC3D Prints\n"
-    html_body = f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;"><p>Hi {html_escape(first_name)},</p><p>Payment has been marked as received for your C3D Prints custom order.</p><p><a href="{tracking_url}" style="display:inline-block;background:#00aaff;color:white;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:bold;">Track Your Order</a></p><p>Thank you,<br>C3D Prints</p></div>"""
-    return send_quote_notification(to_email=row["email"], subject=f"C3D Prints Payment Received — Quote #{row.get('id')}", html_body=html_body, text_body=text_body)
-
-
-def mark_request_paid(request_id: int, platform: str = "Manual", order_id: Optional[str] = None) -> dict:
-    tracking_token = get_or_create_tracking_token(request_id)
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE quote_requests
-                SET paid = TRUE,
-                    paid_at = COALESCE(paid_at, %(paid_at)s),
-                    payment_detected_at = %(payment_detected_at)s,
-                    payment_platform = %(payment_platform)s,
-                    payment_order_id = %(payment_order_id)s,
-                    tracking_token = COALESCE(tracking_token, %(tracking_token)s),
-                    status = 'Paid',
-                    customer_status_note = 'Payment received. Your order is now in the C3D Prints production queue.'
-                WHERE id = %(request_id)s
-                RETURNING *;
-                """,
-                {"request_id": request_id, "paid_at": datetime.now(timezone.utc), "payment_detected_at": datetime.now(timezone.utc), "payment_platform": platform, "payment_order_id": order_id, "tracking_token": tracking_token},
-            )
-            updated = cur.fetchone()
-    email_result = send_payment_received_email(updated)
-    return {"request": updated, "email": email_result}
 
 
 @app.on_event("startup")
@@ -1037,12 +948,6 @@ def ensure_checkout_schema_and_statuses():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid BOOLEAN NOT NULL DEFAULT FALSE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS tracking_token TEXT UNIQUE;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS payment_platform TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS payment_order_id TEXT;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS payment_detected_at TIMESTAMPTZ;")
-            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS customer_status_note TEXT;")
-
 
             cur.execute("""
                 ALTER TABLE quote_requests
@@ -1111,9 +1016,6 @@ Please use your approved quote amount: {price_text}
 
 Once checkout is completed, your order will move into the print queue.
 
-Track your order here:
-{tracking_url}
-
 Thank you,
 C3D Prints
 """
@@ -1137,7 +1039,7 @@ C3D Prints
                 </a>
               </p>
 
-              <p>Once checkout is completed, your order will move into the print queue.</p><p><a href="{tracking_url}" style="display:inline-block;background:#111827;color:white;padding:12px 16px;border-radius:8px;text-decoration:none;font-weight:bold;">Track Your Order</a></p>
+              <p>Once checkout is completed, your order will move into the print queue.</p>
               <p>Thank you,<br>C3D Prints</p>
             </div>
             """
@@ -1159,9 +1061,7 @@ C3D Prints
                     checkout_platform = %(checkout_platform)s,
                     checkout_url = %(checkout_url)s,
                     checkout_sent_at = %(checkout_sent_at)s,
-                    status = 'Awaiting Payment',
-                    tracking_token = COALESCE(tracking_token, %(tracking_token)s),
-                    customer_status_note = 'Checkout link sent. Waiting for payment confirmation.'
+                    status = 'Awaiting Payment'
                 WHERE id = %(request_id)s
                 RETURNING *;
                 """,
@@ -1170,7 +1070,6 @@ C3D Prints
                     "checkout_platform": "Both",
                     "checkout_url": f"Shopify: {SHOPIFY_CHECKOUT_URL} | Etsy: {ETSY_CHECKOUT_URL}",
                     "checkout_sent_at": datetime.now(timezone.utc),
-                    "tracking_token": tracking_token,
                 },
             )
             updated = cur.fetchone()
@@ -1180,114 +1079,44 @@ C3D Prints
 
 @app.patch("/admin/requests/{request_id}/payment")
 def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=Depends(verify_admin)):
-    if request.paid:
-        result = mark_request_paid(request_id, platform="Manual", order_id=None)
-        return {"success": True, "request": result["request"], "email": result["email"]}
-
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
-                UPDATE quote_requests
-                SET paid = FALSE,
-                    paid_at = NULL,
-                    payment_detected_at = NULL,
-                    payment_platform = NULL,
-                    payment_order_id = NULL
-                WHERE id = %(request_id)s
-                RETURNING *;
-                """,
+                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
                 {"request_id": request_id},
             )
+            existing = cur.fetchone()
+
+            if not existing:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            if request.paid:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        paid = TRUE,
+                        paid_at = COALESCE(paid_at, %(paid_at)s),
+                        status = 'Paid'
+                    WHERE id = %(request_id)s
+                    RETURNING *;
+                    """,
+                    {"request_id": request_id, "paid_at": datetime.now(timezone.utc)},
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE quote_requests
+                    SET
+                        paid = FALSE,
+                        paid_at = NULL
+                    WHERE id = %(request_id)s
+                    RETURNING *;
+                    """,
+                    {"request_id": request_id},
+                )
+
             updated = cur.fetchone()
-    if not updated:
-        raise HTTPException(status_code=404, detail="Quote request not found")
+
     return {"success": True, "request": updated}
-
-
-
-
-@app.get("/track/{tracking_token}", response_class=HTMLResponse)
-def public_tracking_page(tracking_token: str):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, name, email, status, final_price, quoted_price,
-                       checkout_sent_at, paid, paid_at, payment_platform,
-                       payment_order_id, payment_detected_at, customer_status_note
-                FROM quote_requests
-                WHERE tracking_token = %(tracking_token)s;
-                """,
-                {"tracking_token": tracking_token},
-            )
-            row = cur.fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Tracking page not found")
-    return HTMLResponse(render_tracking_page(row))
-
-
-@app.post("/webhooks/shopify/order-paid")
-async def shopify_order_paid_webhook(request: Request):
-    payload = await request.json()
-    order_id = clean_text(payload.get("id") or payload.get("order_number") or payload.get("name"))
-    email = clean_text(payload.get("email") or payload.get("contact_email"))
-    note = clean_text(payload.get("note"))
-    tags = clean_text(payload.get("tags"))
-    name = clean_text(payload.get("name"))
-    quote_id = find_quote_id_in_text(note, tags, name, order_id)
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            row = None
-            if quote_id:
-                cur.execute("SELECT id FROM quote_requests WHERE id = %(id)s;", {"id": quote_id})
-                row = cur.fetchone()
-            if not row and email:
-                cur.execute(
-                    """
-                    SELECT id FROM quote_requests
-                    WHERE lower(email) = lower(%(email)s)
-                      AND status IN ('Approved', 'Awaiting Payment', 'Quoted')
-                    ORDER BY created_at DESC LIMIT 1;
-                    """,
-                    {"email": email},
-                )
-                row = cur.fetchone()
-    if not row:
-        return {"success": False, "matched": False, "reason": "No matching quote found"}
-    result = mark_request_paid(row["id"], platform="Shopify", order_id=order_id or None)
-    return {"success": True, "matched": True, "request_id": row["id"], "email": result["email"]}
-
-
-@app.post("/webhooks/etsy/order-paid")
-async def etsy_order_paid_webhook(request: Request):
-    payload = await request.json()
-    order_id = clean_text(payload.get("receipt_id") or payload.get("order_id") or payload.get("id"))
-    email = clean_text(payload.get("buyer_email") or payload.get("email"))
-    note = clean_text(payload.get("message_from_buyer") or payload.get("note") or payload.get("message"))
-    name = clean_text(payload.get("name"))
-    quote_id = find_quote_id_in_text(note, name, order_id)
-
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            row = None
-            if quote_id:
-                cur.execute("SELECT id FROM quote_requests WHERE id = %(id)s;", {"id": quote_id})
-                row = cur.fetchone()
-            if not row and email:
-                cur.execute(
-                    """
-                    SELECT id FROM quote_requests
-                    WHERE lower(email) = lower(%(email)s)
-                      AND status IN ('Approved', 'Awaiting Payment', 'Quoted')
-                    ORDER BY created_at DESC LIMIT 1;
-                    """,
-                    {"email": email},
-                )
-                row = cur.fetchone()
-    if not row:
-        return {"success": False, "matched": False, "reason": "No matching quote found"}
-    result = mark_request_paid(row["id"], platform="Etsy", order_id=order_id or None)
-    return {"success": True, "matched": True, "request_id": row["id"], "email": result["email"]}
 
