@@ -2,6 +2,7 @@ import json
 import math
 import os
 import re
+import secrets
 from html import escape as html_escape
 import struct
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from psycopg.types.json import Json
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from ai_triage import ai_triage_summary
@@ -32,6 +34,7 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "quote-files")
 ETSY_CHECKOUT_URL = os.getenv("ETSY_CHECKOUT_URL", "https://c3dprintsofficial.etsy.com/listing/1249586363")
 SHOPIFY_CHECKOUT_URL = os.getenv("SHOPIFY_CHECKOUT_URL", "https://c3dprints.com/products/custom-3d-printed-cosplay-personalized-character-art-fan-art")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://c3dprints-quote-portal.onrender.com").rstrip("/")
 
 VALID_STATUSES = {
     "New",
@@ -314,7 +317,6 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
-
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_platform TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_url TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS checkout_sent_at TIMESTAMPTZ;")
@@ -404,8 +406,6 @@ def root():
             "/admin/login",
             "/admin/requests",
             "/admin/requests/{request_id}/status",
-            "/admin/requests/{request_id}/send-checkout",
-            "/admin/requests/{request_id}/payment",
         ],
     }
 
@@ -639,11 +639,6 @@ def list_requests(admin=Depends(verify_admin)):
                     quoted_price,
                     quote_message,
                     quote_sent_at,
-                    checkout_platform,
-                    checkout_url,
-                    checkout_sent_at,
-                    paid,
-                    paid_at,
                     status
                 FROM quote_requests
                 ORDER BY created_at DESC
