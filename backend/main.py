@@ -72,6 +72,26 @@ def portal_footer_html(email: str) -> str:
         f"<a href='{portal_url_for(email)}' style='color:#1a73e8;font-weight:bold;text-decoration:none;'>"
         f"View all my quotes &amp; orders</a></p>"
     )
+
+
+def send_portal_link_email(email: str, name: str | None = None) -> dict:
+    """Email a customer the secure link to all their orders. Returns the send result."""
+    first_name = (name or "there").split(" ")[0] or "there"
+    url = portal_url_for(email)
+    html_body = (
+        f'<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">'
+        f'<div style="text-align:center;margin-bottom:18px;">'
+        f'<img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;"></div>'
+        f'<p>Hi {html_escape(first_name)},</p>'
+        f'<p>Here is your link to view all of your C3D Prints quotes and orders and their status:</p>'
+        f'<p style="text-align:center;margin:24px 0;">'
+        f'<a href="{url}" style="background:#1a73e8;color:#fff;text-decoration:none;font-weight:bold;'
+        f'padding:14px 28px;border-radius:8px;display:inline-block;">View My Orders</a></p>'
+        f'<p style="color:#666;font-size:12px;">Or paste this link into your browser:<br>{url}</p>'
+        f'<p>Thank you,<br>C3D Prints</p></div>'
+    )
+    text_body = f"Hi {first_name},\n\nView all your C3D Prints quotes and orders here:\n{url}\n\nThank you,\nC3D Prints"
+    return send_quote_notification(to_email=email, subject="Your C3D Prints orders", html_body=html_body, text_body=text_body)
 DATABASE_URL = os.getenv("DATABASE_URL")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -1074,27 +1094,7 @@ def send_customer_portal_link(request_id: int, admin=Depends(verify_admin)):
     if not row:
         raise HTTPException(status_code=404, detail="Quote request not found")
     email = row["email"]
-    first_name = (row.get("name") or "there").split(" ")[0]
-    url = portal_url_for(email)
-    html_body = (
-        f'<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">'
-        f'<div style="text-align:center;margin-bottom:18px;">'
-        f'<img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;"></div>'
-        f'<p>Hi {html_escape(first_name)},</p>'
-        f'<p>You can view all of your C3D Prints quotes and orders, and their status, in one place:</p>'
-        f'<p style="text-align:center;margin:24px 0;">'
-        f'<a href="{url}" style="background:#1a73e8;color:#fff;text-decoration:none;font-weight:bold;'
-        f'padding:14px 28px;border-radius:8px;display:inline-block;">View My Orders</a></p>'
-        f'<p style="color:#666;font-size:12px;">Or paste this link into your browser:<br>{url}</p>'
-        f'<p>Thank you,<br>C3D Prints</p></div>'
-    )
-    text_body = f"Hi {first_name},\n\nView all your C3D Prints quotes and orders here:\n{url}\n\nThank you,\nC3D Prints"
-    result = send_quote_notification(
-        to_email=email,
-        subject="Your C3D Prints orders",
-        html_body=html_body,
-        text_body=text_body,
-    )
+    result = send_portal_link_email(email, row.get("name"))
     if not result.get("sent"):
         raise HTTPException(status_code=500, detail=f"Email failed: {result.get('reason', 'Unknown error')}")
     return {"success": True, "email": email}
@@ -1726,6 +1726,76 @@ def customer_portal(token: str):
             )
             rows = cur.fetchall()
     return HTMLResponse(render_portal_page(email, rows))
+
+
+def render_orders_lookup_page() -> str:
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>My C3D Prints Orders</title><style>
+:root{{--bg:#0b1623;--card:#162236;--input:#0d1928;--border:#1e3550;--blue-l:#33ccff;--green:#00e890;--text:#ddeeff;--muted:#7fa0bd}}
+body{{margin:0;background:var(--bg);color:var(--text);font-family:Arial,sans-serif;padding:24px}}
+.wrap{{max-width:440px;margin:48px auto;text-align:center}}
+img{{width:96px;height:auto}}
+h1{{color:var(--blue-l);margin:10px 0 6px;font-size:22px}}
+p{{color:var(--muted)}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:16px;padding:24px;margin-top:18px}}
+input{{width:100%;background:var(--input);border:1px solid var(--border);color:var(--text);border-radius:10px;padding:13px;font-size:16px;margin-bottom:12px}}
+button{{width:100%;background:#1a73e8;color:#fff;border:0;border-radius:10px;padding:14px;font-size:16px;font-weight:bold;cursor:pointer}}
+.msg{{margin-top:14px;color:var(--green);min-height:20px}}
+</style></head><body><div class='wrap'>
+<img src='{LOGO_URL}' alt='C3D Prints'><h1>My Orders</h1>
+<p>Enter your email and we'll send you a secure link to view all your quotes and orders.</p>
+<div class='card'>
+<input id='email' type='email' placeholder='you@example.com' autocomplete='email'>
+<button onclick='lookup()'>Email Me My Link</button>
+<div id='msg' class='msg'></div>
+</div></div>
+<script>
+async function lookup(){{
+  var e=document.getElementById('email').value.trim();
+  var m=document.getElementById('msg');
+  if(!e||e.indexOf('@')<0){{m.style.color='#ff3d5a';m.textContent='Please enter a valid email.';return}}
+  m.style.color='var(--muted)';m.textContent='Sending...';
+  try{{
+    var r=await fetch('{PUBLIC_BASE_URL}/orders/lookup',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{email:e}})}});
+    var d=await r.json();
+    m.style.color='#00e890';
+    m.textContent=d.message||'If we have orders for that email, we just sent you a link. Check your inbox.';
+  }}catch(err){{m.style.color='#ff3d5a';m.textContent='Something went wrong. Please try again.';}}
+}}
+</script></body></html>"""
+
+
+@app.get("/orders", response_class=HTMLResponse)
+def orders_lookup_page():
+    return HTMLResponse(render_orders_lookup_page())
+
+
+class OrdersLookupRequest(BaseModel):
+    email: str
+
+
+@app.post("/orders/lookup")
+def orders_lookup(req: OrdersLookupRequest):
+    """Public: email a customer their secure orders link IF they have orders.
+    Always returns the same neutral message so it never reveals whether an email exists."""
+    email = (req.email or "").strip().lower()
+    if email and "@" in email:
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT name FROM quote_requests WHERE lower(email) = %(e)s AND status <> 'Archived' "
+                    "ORDER BY created_at DESC LIMIT 1;",
+                    {"e": email},
+                )
+                row = cur.fetchone()
+        if row:
+            try:
+                send_portal_link_email(email, row.get("name"))
+            except Exception as exc:
+                print(f"[orders-lookup] failed to send link: {exc}")
+    return {"success": True, "message": "If we have orders for that email, we just sent you a link. Check your inbox."}
+
 
 @app.post("/admin/requests/{request_id}/tracking")
 def create_request_tracking_link(request_id: int, admin=Depends(verify_admin)):
