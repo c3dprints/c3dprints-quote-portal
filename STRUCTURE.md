@@ -46,9 +46,13 @@ backend via the hardcoded `API_BASE` in `index.html` and `admin.html`.
    `backend/main.py`. When removing a route, grep the HTML for callers first.
 4. Keep `backend/.env.example` in sync with every `os.getenv(...)` in `backend/`.
 
-## Known issues (as of this cleanup)
+## Known issues
 
-- `admin.html` calls `POST /admin/requests/{id}/ai-quote-assist`, but `backend/main.py`
-  has **no such route** → the "AI Quote Assist" button currently 404s. Fix is to add
-  the route (wiring `ai_triage.py`) or repoint the button. Tracked as the first bug
-  after stabilization.
+- FIXED: `admin.html`'s "AI Quote Assist" button (`POST /admin/requests/{id}/ai-quote-assist`)
+  now has a backend route. The backend generates the text summary plus the structured
+  fields the panel reads (`ai_quote_structured`), stored in two self-migrating columns.
+  Requires a Render redeploy (so `init_db()` adds the columns) to go live.
+- `init_db()` has no `ADD COLUMN IF NOT EXISTS` for some older columns it SELECTs
+  (`checkout_*`, `paid*`, `tracking_token`, `customer_status_note`). The live DB already
+  has them, but a brand-new DB relies on the `CREATE TABLE` block instead. Worth
+  reconciling if a fresh environment is ever stood up.
