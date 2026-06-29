@@ -421,6 +421,16 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS assigned_printer_id BIGINT;")
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS printers (
+                    id BIGSERIAL PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'Available',
+                    notes TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+            """)
 
 
 
@@ -1885,3 +1895,155 @@ def admin_upload_files(
     combined = existing + new_files
     update_request_files(request_id, combined)
     return {"success": True, "uploaded_files": combined, "added": len(new_files)}
+
+
+# ----- Production queue / printers -----
+
+PRINTER_STATUSES = {"Available", "Printing", "Offline", "Maintenance"}
+PRODUCTION_STATUSES = ["Approved", "Awaiting Payment", "Paid", "Printing"]
+
+
+class PrinterCreate(BaseModel):
+    name: str
+    notes: Optional[str] = None
+
+
+class PrinterUpdate(BaseModel):
+    name: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AssignPrinterRequest(BaseModel):
+    printer_id: Optional[int] = None
+
+
+@app.post("/admin/printers")
+def add_printer(req: PrinterCreate, admin=Depends(verify_admin)):
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Printer name is required")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO printers (name, notes) VALUES (%(n)s, %(o)s) RETURNING id, name, status, notes;",
+                {"n": name, "o": req.notes},
+            )
+            return {"success": True, "printer": cur.fetchone()}
+
+
+@app.patch("/admin/printers/{printer_id}")
+def update_printer(printer_id: int, req: PrinterUpdate, admin=Depends(verify_admin)):
+    if req.status is not None and req.status not in PRINTER_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Invalid status. Valid: {', '.join(sorted(PRINTER_STATUSES))}")
+    fields = []
+    params = {"id": printer_id}
+    if req.name is not None:
+        fields.append("name = %(name)s"); params["name"] = req.name.strip()
+    if req.status is not None:
+        fields.append("status = %(status)s"); params["status"] = req.status
+    if req.notes is not None:
+        fields.append("notes = %(notes)s"); params["notes"] = req.notes
+    if not fields:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"UPDATE printers SET {', '.join(fields)} WHERE id = %(id)s RETURNING id, name, status, notes;",
+                params,
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    return {"success": True, "printer": row}
+
+
+@app.delete("/admin/printers/{printer_id}")
+def delete_printer(printer_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE quote_requests SET assigned_printer_id = NULL WHERE assigned_printer_id = %(id)s;", {"id": printer_id})
+            cur.execute("DELETE FROM printers WHERE id = %(id)s RETURNING id;", {"id": printer_id})
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Printer not found")
+    return {"success": True, "deleted_id": row["id"]}
+
+
+@app.patch("/admin/requests/{request_id}/assign-printer")
+def assign_printer(request_id: int, req: AssignPrinterRequest, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            if req.printer_id is not None:
+                cur.execute("SELECT id FROM printers WHERE id = %(id)s;", {"id": req.printer_id})
+                if not cur.fetchone():
+                    raise HTTPException(status_code=400, detail="Printer not found")
+            cur.execute(
+                "UPDATE quote_requests SET assigned_printer_id = %(pid)s WHERE id = %(rid)s RETURNING id, assigned_printer_id;",
+                {"pid": req.printer_id, "rid": request_id},
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Quote request not found")
+    return {"success": True, "request_id": row["id"], "assigned_printer_id": row["assigned_printer_id"]}
+
+
+def _job_est_hours(row: dict) -> Optional[float]:
+    analysis = pick_best_stl_analysis(row.get("uploaded_files"))
+    if analysis and analysis.get("estimated_hours_rough"):
+        return round(float(analysis["estimated_hours_rough"]) * max(1, int(row.get("quantity") or 1)), 2)
+    return None
+
+
+@app.get("/admin/production-queue")
+def production_queue(admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT id, name, status, notes FROM printers ORDER BY id;")
+            printers = cur.fetchall()
+            cur.execute(
+                """
+                SELECT id, name, project_description, status, due_date, quantity,
+                       uploaded_files, assigned_printer_id
+                FROM quote_requests
+                WHERE status = ANY(%(statuses)s)
+                ORDER BY (due_date IS NULL OR due_date = ''), due_date ASC, created_at ASC;
+                """,
+                {"statuses": PRODUCTION_STATUSES},
+            )
+            rows = cur.fetchall()
+
+    load = {p["id"]: {"jobs": 0, "hours": 0.0} for p in printers}
+    jobs = []
+    for r in rows:
+        est = _job_est_hours(r)
+        pid = r.get("assigned_printer_id")
+        if pid in load:
+            load[pid]["jobs"] += 1
+            load[pid]["hours"] += est or 0
+        jobs.append({
+            "id": r["id"],
+            "name": r.get("name"),
+            "project": (r.get("project_description") or "")[:90],
+            "status": r.get("status"),
+            "due_date": r.get("due_date"),
+            "quantity": r.get("quantity") or 1,
+            "est_hours": est,
+            "assigned_printer_id": pid,
+            "suggested_printer_id": None,
+        })
+
+    # Greedy least-loaded suggestion across Available printers, for unassigned jobs.
+    available = [p["id"] for p in printers if p["status"] == "Available"]
+    sugg_load = {pid: load[pid]["hours"] for pid in available}
+    for j in jobs:
+        if j["assigned_printer_id"] is None and available:
+            best = min(available, key=lambda pid: sugg_load[pid])
+            j["suggested_printer_id"] = best
+            sugg_load[best] += j["est_hours"] or 0
+
+    printers_out = [
+        {**p, "assigned_jobs": load[p["id"]]["jobs"], "assigned_hours": round(load[p["id"]]["hours"], 2)}
+        for p in printers
+    ]
+    return {"printers": printers_out, "jobs": jobs}
