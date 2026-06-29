@@ -20,8 +20,14 @@ create table if not exists public.quote_requests (
   additional_notes text,
   uploaded_files jsonb default '[]'::jsonb,
   ai_summary text,
+  ai_quote_assist text,
+  ai_quote_structured jsonb default '{}'::jsonb,
   status text not null default 'New'
 );
+
+-- Additive migration for existing tables (safe to re-run).
+alter table public.quote_requests add column if not exists ai_quote_assist text;
+alter table public.quote_requests add column if not exists ai_quote_structured jsonb default '{}'::jsonb;
 
 create index if not exists idx_quote_requests_created_at
 on public.quote_requests (created_at desc);

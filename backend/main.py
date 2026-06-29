@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from ai_triage import ai_triage_summary
+from ai_triage import ai_triage_summary, ai_quote_assist
 from auth import check_admin_credentials, create_admin_token, verify_admin
 from email_service import send_quote_notification
 from pricing_engine import PricingSettings, calculate_quote
@@ -294,7 +294,9 @@ def init_db():
                     paid BOOLEAN NOT NULL DEFAULT FALSE,
                     paid_at TIMESTAMPTZ,
                     tracking_token TEXT UNIQUE,
-                    customer_status_note TEXT
+                    customer_status_note TEXT,
+                    ai_quote_assist TEXT,
+                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
                 );
                 """
             )
@@ -319,6 +321,8 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
 
 
 
@@ -620,6 +624,8 @@ def list_requests(admin=Depends(verify_admin)):
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    ai_quote_assist,
+                    ai_quote_structured,
                     final_price,
                     deposit_paid,
                     due_date,
@@ -643,6 +649,77 @@ def list_requests(admin=Depends(verify_admin)):
                 """
             )
             return cur.fetchall()
+
+
+@app.post("/admin/requests/{request_id}/ai-quote-assist")
+def generate_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, email, phone, project_description, quantity,
+                       approx_size, deadline, material_preference, color_preference,
+                       use_case, requirements, delivery_method, shipping_location,
+                       additional_notes, uploaded_files
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            data = {
+                "name": row["name"],
+                "email": row["email"],
+                "phone": row["phone"],
+                "project_description": row["project_description"],
+                "quantity": row["quantity"],
+                "approx_size": row["approx_size"],
+                "deadline": row["deadline"],
+                "material_preference": row["material_preference"],
+                "color_preference": row["color_preference"],
+                "use_case": row["use_case"],
+                "requirements": row["requirements"] or [],
+                "delivery_method": row["delivery_method"],
+                "shipping_location": row["shipping_location"],
+                "additional_notes": row["additional_notes"],
+                "uploaded_files": row["uploaded_files"] or [],
+            }
+
+            result = ai_quote_assist(data)
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET ai_quote_assist = %(ai_quote_assist)s,
+                    ai_quote_structured = %(ai_quote_structured)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, ai_quote_assist,
+                    ai_quote_structured, final_price, deposit_paid, due_date,
+                    print_notes, actual_cost, profit_notes, quoted_price,
+                    quote_message, quote_sent_at, checkout_platform, checkout_url,
+                    checkout_sent_at, paid, paid_at, tracking_token,
+                    customer_status_note, status;
+                """,
+                {
+                    "ai_quote_assist": result["text"],
+                    "ai_quote_structured": Json(result["structured"]),
+                    "request_id": request_id,
+                },
+            )
+            updated = cur.fetchone()
+
+    return {
+        "success": True,
+        "ai_quote_assist": result["text"],
+        "request": updated,
+    }
 
 
 class StatusUpdateRequest(BaseModel):
