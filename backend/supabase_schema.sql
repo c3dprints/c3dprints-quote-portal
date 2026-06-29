@@ -28,6 +28,8 @@ create table if not exists public.quote_requests (
 -- Additive migration for existing tables (safe to re-run).
 alter table public.quote_requests add column if not exists ai_quote_assist text;
 alter table public.quote_requests add column if not exists ai_quote_structured jsonb default '{}'::jsonb;
+alter table public.quote_requests add column if not exists approval_token text unique;
+alter table public.quote_requests add column if not exists approved_at timestamptz;
 
 create index if not exists idx_quote_requests_created_at
 on public.quote_requests (created_at desc);
