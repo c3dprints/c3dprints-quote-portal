@@ -1077,7 +1077,7 @@ def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depe
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, name, email, quoted_price, final_price, project_description
+                SELECT id, name, email, quoted_price, final_price, project_description, tracking_token
                 FROM quote_requests
                 WHERE id = %(request_id)s;
                 """,
@@ -1091,6 +1091,8 @@ def send_checkout_link(request_id: int, request: CheckoutLinkRequest, admin=Depe
             price = row.get("quoted_price") or row.get("final_price")
             price_text = f"${float(price):.2f}" if price is not None else "your approved quote amount"
             first_name = (row.get("name") or "there").split(" ")[0]
+            tracking_token = row.get("tracking_token") or create_tracking_token()
+            tracking_url = f"{PUBLIC_BASE_URL}/track/{tracking_token}"
 
             text_body = f"""Hi {first_name},
 
@@ -1107,6 +1109,9 @@ Shop on Etsy:
 Please use your approved quote amount: {price_text}
 
 Once checkout is completed, your order will move into the print queue.
+
+Track your order status anytime here:
+{tracking_url}
 
 Thank you,
 C3D Prints
@@ -1135,6 +1140,12 @@ C3D Prints
               </p>
 
               <p>Once checkout is completed, your order will move into the print queue.</p>
+              <p style="margin-top:18px;">
+                <a href="{tracking_url}" style="display:inline-block;background:#1a73e8;color:white;padding:12px 18px;border-radius:8px;text-decoration:none;font-weight:bold;">
+                  Track Your Order
+                </a>
+              </p>
+              <p style="color:#666;font-size:12px;">Bookmark this to check your order status anytime:<br>{tracking_url}</p>
               <p>Thank you,<br>C3D Prints</p>
             </div>
             """
@@ -1156,6 +1167,7 @@ C3D Prints
                     checkout_platform = %(checkout_platform)s,
                     checkout_url = %(checkout_url)s,
                     checkout_sent_at = %(checkout_sent_at)s,
+                    tracking_token = %(tracking_token)s,
                     status = 'Awaiting Payment'
                 WHERE id = %(request_id)s
                 RETURNING *;
@@ -1165,6 +1177,7 @@ C3D Prints
                     "checkout_platform": "Both",
                     "checkout_url": f"Shopify: {SHOPIFY_CHECKOUT_URL} | Etsy: {ETSY_CHECKOUT_URL}",
                     "checkout_sent_at": datetime.now(timezone.utc),
+                    "tracking_token": tracking_token,
                 },
             )
             updated = cur.fetchone()
@@ -1177,7 +1190,8 @@ def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT id FROM quote_requests WHERE id = %(request_id)s;",
+                "SELECT id, name, email, quoted_price, final_price, paid, tracking_token "
+                "FROM quote_requests WHERE id = %(request_id)s;",
                 {"request_id": request_id},
             )
             existing = cur.fetchone()
@@ -1186,17 +1200,19 @@ def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=
                 raise HTTPException(status_code=404, detail="Quote request not found")
 
             if request.paid:
+                tracking_token = existing.get("tracking_token") or create_tracking_token()
                 cur.execute(
                     """
                     UPDATE quote_requests
                     SET
                         paid = TRUE,
                         paid_at = COALESCE(paid_at, %(paid_at)s),
+                        tracking_token = %(tracking_token)s,
                         status = 'Paid'
                     WHERE id = %(request_id)s
                     RETURNING *;
                     """,
-                    {"request_id": request_id, "paid_at": datetime.now(timezone.utc)},
+                    {"request_id": request_id, "paid_at": datetime.now(timezone.utc), "tracking_token": tracking_token},
                 )
             else:
                 cur.execute(
@@ -1213,8 +1229,55 @@ def update_payment_status(request_id: int, request: PaymentStatusRequest, admin=
 
             updated = cur.fetchone()
 
+    # Email the customer a payment confirmation + tracking link, but only on the
+    # transition into Paid (not on repeat marks). Best-effort: never fail the
+    # payment update because an email didn't send.
+    if request.paid and not existing.get("paid"):
+        send_payment_confirmation(updated)
+
     return {"success": True, "request": updated}
 
+
+def send_payment_confirmation(row: dict) -> None:
+    try:
+        email = row.get("email")
+        if not email:
+            return
+        first_name = (row.get("name") or "there").split(" ")[0]
+        price = row.get("quoted_price") or row.get("final_price")
+        price_text = f"${float(price):.2f}" if price is not None else "your order"
+        token = row.get("tracking_token")
+        tracking_url = f"{PUBLIC_BASE_URL}/track/{token}" if token else None
+        track_html = (
+            f'<p style="margin-top:18px;"><a href="{tracking_url}" '
+            f'style="display:inline-block;background:#1a73e8;color:white;padding:12px 18px;'
+            f'border-radius:8px;text-decoration:none;font-weight:bold;">Track Your Order</a></p>'
+            f'<p style="color:#666;font-size:12px;">Check your order status anytime:<br>{tracking_url}</p>'
+        ) if tracking_url else ""
+        track_text = f"\n\nTrack your order status anytime:\n{tracking_url}" if tracking_url else ""
+        html_body = (
+            f'<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;max-width:600px;margin:auto;">'
+            f'<div style="text-align:center;margin-bottom:18px;">'
+            f'<img src="{LOGO_URL}" alt="C3D Prints" width="120" style="width:120px;height:auto;"></div>'
+            f'<p>Hi {html_escape(first_name)},</p>'
+            f'<p>We have received your payment of <strong>{html_escape(price_text)}</strong>. Thank you!</p>'
+            f'<p>Your order is now in our production queue. You can follow its progress, '
+            f'from printing through completion, on your tracking page.</p>'
+            f'{track_html}'
+            f'<p>Thank you,<br>C3D Prints</p></div>'
+        )
+        text_body = (
+            f"Hi {first_name},\n\nWe have received your payment of {price_text}. Thank you!\n\n"
+            f"Your order is now in our production queue.{track_text}\n\nThank you,\nC3D Prints"
+        )
+        send_quote_notification(
+            to_email=email,
+            subject="Payment received - your C3D Prints order is in production",
+            html_body=html_body,
+            text_body=text_body,
+        )
+    except Exception as exc:
+        print(f"Payment confirmation email failed: {exc}")
 
 
 
