@@ -20,7 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from ai_triage import ai_triage_summary
+from ai_triage import ai_triage_summary, ai_quote_assist
 from auth import check_admin_credentials, create_admin_token, verify_admin
 from email_service import send_quote_notification
 from pricing_engine import PricingSettings, calculate_quote
@@ -294,7 +294,9 @@ def init_db():
                     paid BOOLEAN NOT NULL DEFAULT FALSE,
                     paid_at TIMESTAMPTZ,
                     tracking_token TEXT UNIQUE,
-                    customer_status_note TEXT
+                    customer_status_note TEXT,
+                    ai_quote_assist TEXT,
+                    ai_quote_structured JSONB DEFAULT '{}'::jsonb
                 );
                 """
             )
@@ -319,6 +321,8 @@ def init_db():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quoted_price NUMERIC;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_message TEXT;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS quote_sent_at TIMESTAMPTZ;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_assist TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS ai_quote_structured JSONB DEFAULT '{}'::jsonb;")
 
 
 
@@ -620,6 +624,8 @@ def list_requests(admin=Depends(verify_admin)):
                     additional_notes,
                     uploaded_files,
                     ai_summary,
+                    ai_quote_assist,
+                    ai_quote_structured,
                     final_price,
                     deposit_paid,
                     due_date,
@@ -643,6 +649,77 @@ def list_requests(admin=Depends(verify_admin)):
                 """
             )
             return cur.fetchall()
+
+
+@app.post("/admin/requests/{request_id}/ai-quote-assist")
+def generate_ai_quote_assist(request_id: int, admin=Depends(verify_admin)):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, name, email, phone, project_description, quantity,
+                       approx_size, deadline, material_preference, color_preference,
+                       use_case, requirements, delivery_method, shipping_location,
+                       additional_notes, uploaded_files
+                FROM quote_requests
+                WHERE id = %(request_id)s;
+                """,
+                {"request_id": request_id},
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+
+            data = {
+                "name": row["name"],
+                "email": row["email"],
+                "phone": row["phone"],
+                "project_description": row["project_description"],
+                "quantity": row["quantity"],
+                "approx_size": row["approx_size"],
+                "deadline": row["deadline"],
+                "material_preference": row["material_preference"],
+                "color_preference": row["color_preference"],
+                "use_case": row["use_case"],
+                "requirements": row["requirements"] or [],
+                "delivery_method": row["delivery_method"],
+                "shipping_location": row["shipping_location"],
+                "additional_notes": row["additional_notes"],
+                "uploaded_files": row["uploaded_files"] or [],
+            }
+
+            result = ai_quote_assist(data)
+
+            cur.execute(
+                """
+                UPDATE quote_requests
+                SET ai_quote_assist = %(ai_quote_assist)s,
+                    ai_quote_structured = %(ai_quote_structured)s
+                WHERE id = %(request_id)s
+                RETURNING
+                    id, created_at, name, email, phone, project_description, quantity,
+                    approx_size, deadline, material_preference, color_preference,
+                    use_case, requirements, delivery_method, shipping_location,
+                    additional_notes, uploaded_files, ai_summary, ai_quote_assist,
+                    ai_quote_structured, final_price, deposit_paid, due_date,
+                    print_notes, actual_cost, profit_notes, quoted_price,
+                    quote_message, quote_sent_at, checkout_platform, checkout_url,
+                    checkout_sent_at, paid, paid_at, tracking_token,
+                    customer_status_note, status;
+                """,
+                {
+                    "ai_quote_assist": result["text"],
+                    "ai_quote_structured": Json(result["structured"]),
+                    "request_id": request_id,
+                },
+            )
+            updated = cur.fetchone()
+
+    return {
+        "success": True,
+        "ai_quote_assist": result["text"],
+        "request": updated,
+    }
 
 
 class StatusUpdateRequest(BaseModel):
@@ -912,23 +989,32 @@ def send_quote_to_customer(request_id: int, request: SendQuoteRequest, admin=Dep
     subject = request.subject.strip() or "Your C3D Prints Custom Quote"
     with get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute("SELECT id, name, email FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
+            cur.execute("SELECT id, name, email, approval_token FROM quote_requests WHERE id = %(request_id)s;", {"request_id": request_id})
             quote_request = cur.fetchone()
             if not quote_request:
                 raise HTTPException(status_code=404, detail="Quote request not found")
-            html_body = f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;"><pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre></div>"""
-            email_result = send_quote_notification(to_email=quote_request["email"], subject=subject, html_body=html_body, text_body=message)
+            approval_token = quote_request.get("approval_token") or secrets.token_urlsafe(24)
+            approval_url = f"{PUBLIC_BASE_URL}/approve/{approval_token}"
+            html_body = (
+                f"""<div style="font-family:Arial,sans-serif;line-height:1.5;color:#111;">"""
+                f"""<pre style="white-space:pre-wrap;font-family:Arial,sans-serif;">{message}</pre>"""
+                f"""{approval_button_html(approval_token)}"""
+                f"""</div>"""
+            )
+            text_body = f"{message}\n\nApprove this quote: {approval_url}"
+            email_result = send_quote_notification(to_email=quote_request["email"], subject=subject, html_body=html_body, text_body=text_body)
             if not email_result.get("sent"):
                 raise HTTPException(status_code=500, detail=f"Email failed: {email_result.get('reason', 'Unknown error')}")
             cur.execute("""
                 UPDATE quote_requests
-                SET status = 'Quoted', quoted_price = %(quoted_price)s, quote_message = %(quote_message)s, quote_sent_at = %(quote_sent_at)s
+                SET status = 'Quoted', quoted_price = %(quoted_price)s, quote_message = %(quote_message)s,
+                    quote_sent_at = %(quote_sent_at)s, approval_token = %(approval_token)s
                 WHERE id = %(request_id)s
                 RETURNING id, created_at, name, email, phone, project_description, quantity, approx_size, deadline,
                     material_preference, color_preference, use_case, requirements, delivery_method, shipping_location,
                     additional_notes, uploaded_files, ai_summary, final_price, deposit_paid, due_date, print_notes,
                     actual_cost, profit_notes, quoted_price, quote_message, quote_sent_at, status;
-            """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc)})
+            """, {"request_id": request_id, "quoted_price": request.quoted_price, "quote_message": message, "quote_sent_at": datetime.now(timezone.utc), "approval_token": approval_token})
             updated = cur.fetchone()
     return {"success": True, "email": email_result, "request": updated}
 
@@ -947,6 +1033,8 @@ def ensure_checkout_schema_and_statuses():
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS tracking_token TEXT UNIQUE;")
             cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS customer_status_note TEXT;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS approval_token TEXT UNIQUE;")
+            cur.execute("ALTER TABLE quote_requests ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;")
 
             cur.execute("""
                 ALTER TABLE quote_requests
@@ -1171,6 +1259,168 @@ def public_tracking_page(tracking_token: str):
 def create_request_tracking_link(request_id: int, admin=Depends(verify_admin)):
     token = get_or_create_tracking_token(request_id)
     return {"success": True, "tracking_token": token, "tracking_url": f"{PUBLIC_BASE_URL}/track/{token}"}
+
+
+# ----- Customer quote approval -----
+
+APPROVED_STATUSES = {"Approved", "Awaiting Payment", "Paid", "Printing", "Completed"}
+
+
+def get_or_create_approval_token(request_id: int) -> str:
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT approval_token FROM quote_requests WHERE id = %(id)s;", {"id": request_id})
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Quote request not found")
+            if row.get("approval_token"):
+                return row["approval_token"]
+            token = secrets.token_urlsafe(24)
+            cur.execute(
+                "UPDATE quote_requests SET approval_token = %(token)s WHERE id = %(id)s RETURNING approval_token;",
+                {"token": token, "id": request_id},
+            )
+            return cur.fetchone()["approval_token"]
+
+
+def approval_button_html(token: str) -> str:
+    url = f"{PUBLIC_BASE_URL}/approve/{token}"
+    return (
+        f"<div style='margin:28px 0;text-align:center;'>"
+        f"<a href='{url}' "
+        f"style='background:#00b341;color:#ffffff;text-decoration:none;font-weight:bold;"
+        f"font-family:Arial,sans-serif;font-size:16px;padding:14px 30px;border-radius:8px;display:inline-block;'>"
+        f"Approve This Quote</a>"
+        f"<p style='color:#666;font-size:12px;margin-top:10px;'>"
+        f"Or copy this link into your browser:<br>{url}</p>"
+        f"</div>"
+    )
+
+
+def render_approval_page(row: dict) -> str:
+    status = row.get("status") or "Quoted"
+    price = row.get("quoted_price") or row.get("final_price")
+    price_text = f"${float(price):.2f}" if price is not None else "the amount in your quote"
+    name = html_escape(str(row.get("name") or "there"))
+    message = html_escape(str(row.get("quote_message") or "")).replace("\n", "<br>")
+    rid = html_escape(str(row.get("id")))
+    token = html_escape(str(row.get("approval_token")))
+
+    if status in APPROVED_STATUSES:
+        body = (
+            "<div class='badge done'>Already approved</div>"
+            "<p>Thanks! This quote is already approved. C3D Prints will follow up with checkout and "
+            "production details. You can close this page.</p>"
+        )
+    else:
+        body = (
+            f"<div class='price'>{html_escape(price_text)}</div>"
+            f"<div class='msg'>{message}</div>"
+            f"<form method='post' action='{PUBLIC_BASE_URL}/approve/{token}'>"
+            f"<button type='submit' class='approve-btn'>Approve This Quote</button>"
+            f"</form>"
+            "<p class='fine'>By approving, you confirm you want C3D Prints to proceed with this quote. "
+            "You will receive checkout details next.</p>"
+        )
+
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Approve Your C3D Prints Quote</title><style>
+body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;padding:24px}}
+.wrap{{max-width:620px;margin:auto}}
+.card{{background:#162236;border:1px solid #1e3550;border-radius:18px;padding:26px}}
+h1{{color:#33ccff;margin:0 0 6px}}p{{color:#8aa8c5}}
+.price{{font-size:34px;color:#00e890;font-weight:bold;margin:16px 0}}
+.msg{{background:#0d1928;border:1px solid #1e3550;border-radius:12px;padding:16px;color:#cfe3f7;margin:16px 0;white-space:normal}}
+.approve-btn{{background:#00b341;color:#fff;border:0;border-radius:10px;padding:16px 28px;font-size:17px;font-weight:bold;cursor:pointer;width:100%}}
+.approve-btn:hover{{background:#00c94a}}
+.fine{{font-size:12px;color:#6f8aa6;margin-top:14px}}
+.badge{{display:inline-block;border-radius:999px;padding:6px 12px;font-weight:bold;margin-bottom:8px}}
+.done{{color:#00e890;border:1px solid rgba(0,232,144,.45)}}
+</style></head><body><div class='wrap'><div class='card'>
+<h1>C3D Prints</h1><p>Quote #{rid} for {name}</p>{body}
+</div></div></body></html>"""
+
+
+def render_approval_result_page(row: dict) -> str:
+    rid = html_escape(str(row.get("id")))
+    name = html_escape(str(row.get("name") or "there"))
+    track = ""
+    if row.get("tracking_token"):
+        track_url = f"{PUBLIC_BASE_URL}/track/{html_escape(str(row.get('tracking_token')))}"
+        track = f"<p><a href='{track_url}' style='color:#33ccff'>Track your order status</a></p>"
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Quote Approved</title><style>
+body{{margin:0;background:#0b1623;color:#ddeeff;font-family:Arial,sans-serif;padding:24px}}
+.wrap{{max-width:620px;margin:auto;text-align:center}}
+.card{{background:#162236;border:1px solid #1e3550;border-radius:18px;padding:30px}}
+h1{{color:#00e890;margin:0 0 10px}}p{{color:#8aa8c5}}
+.check{{font-size:54px;color:#00e890}}
+</style></head><body><div class='wrap'><div class='card'>
+<div class='check'>&#10004;</div>
+<h1>Quote Approved</h1>
+<p>Thanks, {name}! Your quote #{rid} is approved.</p>
+<p>C3D Prints will send your checkout link shortly so you can complete payment.</p>
+{track}
+</div></div></body></html>"""
+
+
+@app.get("/approve/{approval_token}", response_class=HTMLResponse)
+def public_approval_page(approval_token: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, status, quoted_price, final_price, quote_message, approval_token "
+                "FROM quote_requests WHERE approval_token = %(token)s;",
+                {"token": approval_token},
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Approval link not found")
+    return HTMLResponse(render_approval_page(row))
+
+
+@app.post("/approve/{approval_token}", response_class=HTMLResponse)
+def public_approval_confirm(approval_token: str):
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT id, name, email, status, tracking_token FROM quote_requests "
+                "WHERE approval_token = %(token)s;",
+                {"token": approval_token},
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Approval link not found")
+
+            # Idempotent: only advance if not already approved/further along.
+            if row["status"] not in APPROVED_STATUSES:
+                cur.execute(
+                    "UPDATE quote_requests SET status='Approved', approved_at=%(now)s "
+                    "WHERE approval_token=%(token)s RETURNING id, name, tracking_token;",
+                    {"now": datetime.now(timezone.utc), "token": approval_token},
+                )
+                row = cur.fetchone()
+                _notify_admin_of_approval(row)
+
+    return HTMLResponse(render_approval_result_page(row))
+
+
+def _notify_admin_of_approval(row: dict) -> None:
+    try:
+        notify_email = os.getenv("QUOTE_NOTIFY_EMAIL", "hi@c3dprints.com")
+        rid = html_escape(str(row.get("id")))
+        name = html_escape(str(row.get("name") or ""))
+        send_quote_notification(
+            to_email=notify_email,
+            subject=f"Quote #{row.get('id')} approved by {row.get('name')}",
+            html_body=f"<p>Quote request #{rid} was just approved by {name}.</p>"
+                      f"<p>Next step: send the checkout link from the admin dashboard.</p>",
+            text_body=f"Quote request #{row.get('id')} approved by {row.get('name')}. Send checkout link next.",
+        )
+    except Exception as exc:
+        print(f"Admin approval notification failed: {exc}")
 
 @app.patch("/admin/requests/{request_id}/archive")
 def archive_request(request_id: int, admin=Depends(verify_admin)):
