@@ -1082,7 +1082,14 @@ def get_admin_analytics(admin=Depends(verify_admin)):
                     COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing')), 0)::float AS active_job_value,
                     COALESCE(SUM(final_price) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS revenue_tracked,
                     COALESCE(SUM(actual_cost) FILTER (WHERE status IN ('Approved','Printing','Completed')), 0)::float AS actual_cost_tracked,
-                    COALESCE(SUM(final_price - COALESCE(actual_cost,0)) FILTER (WHERE status IN ('Approved','Printing','Completed') AND final_price IS NOT NULL), 0)::float AS estimated_profit
+                    COALESCE(SUM(final_price - COALESCE(actual_cost,0)) FILTER (WHERE status IN ('Approved','Printing','Completed') AND final_price IS NOT NULL), 0)::float AS estimated_profit,
+                    COUNT(*) FILTER (WHERE status = 'Reviewing')::int AS reviewing_count,
+                    COUNT(*) FILTER (WHERE status = 'Awaiting Payment')::int AS awaiting_payment_count,
+                    COUNT(*) FILTER (WHERE status = 'Paid')::int AS paid_count,
+                    COUNT(*) FILTER (WHERE quote_sent_at IS NOT NULL)::int AS quotes_sent_count,
+                    COUNT(*) FILTER (WHERE status IN ('Approved','Awaiting Payment','Paid','Printing','Completed'))::int AS approved_or_beyond_count,
+                    COUNT(*) FILTER (WHERE paid = TRUE)::int AS paid_orders_count,
+                    COALESCE(SUM(COALESCE(final_price, quoted_price)) FILTER (WHERE paid = TRUE), 0)::float AS collected_revenue
                 FROM quote_requests;
             """)
             return cur.fetchone()
