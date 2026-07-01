@@ -18,9 +18,9 @@ from psycopg.rows import dict_row
 from psycopg.types.json import Json
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel
 
 from ai_triage import ai_triage_summary, ai_quote_assist
@@ -535,7 +535,13 @@ def on_startup():
 
 
 @app.get("/")
-def root():
+def root(request: Request):
+    # On the customer domain (orders.c3dprints.com), send the bare domain straight
+    # to the orders lookup page. The onrender.com root keeps its JSON info response
+    # (used for health/info) untouched.
+    host = (request.headers.get("host") or "").lower()
+    if host.startswith("orders."):
+        return RedirectResponse(url="/orders")
     return {
         "ok": True,
         "app": APP_NAME,
